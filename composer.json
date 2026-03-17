@@ -1,0 +1,23 @@
+{
+    "name": "hexawebsystems/laravel-hexa-package-wordpress",
+    "description": "WordPress REST API connector for the Hexa Core framework.",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "hexa_package_wordpress\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "hexa_package_wordpress\\Providers\\WordPressServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
