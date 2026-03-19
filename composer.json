@@ -1,6 +1,6 @@
 {
     "name": "hexawebsystems/laravel-hexa-package-wordpress",
-    "description": "WordPress REST API connector for the Hexa Core framework.",
+    "description": "WordPress — REST API connector for post management, site configuration, and remote content publishing.",
     "type": "library",
     "license": "proprietary",
     "require": {
