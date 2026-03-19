@@ -12,6 +12,7 @@ class WordPressServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        ->mergeConfigFrom(__DIR__ . '/../../config/wordpress.php', 'wordpress');
         $this->app->singleton(WordPressService::class);
     }
 
