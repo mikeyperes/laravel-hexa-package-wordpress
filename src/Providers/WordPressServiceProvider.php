@@ -16,5 +16,28 @@ class WordPressServiceProvider extends ServiceProvider
         $this->app->singleton(WordPressService::class);
     }
 
-    public function boot(): void {}
+    /**
+     * Bootstrap package resources.
+     *
+     * @return void
+     */
+    public function boot(): void
+    {
+        $this->loadRoutesFrom(__DIR__ . '/../../routes/wordpress.php');
+        $this->loadViewsFrom(__DIR__ . '/../../resources/views', 'wordpress');
+        $this->registerSidebarItems();
+    }
+
+    /**
+     * Push sidebar menu items into core layout stacks.
+     *
+     * @return void
+     */
+    private function registerSidebarItems(): void
+    {
+        view()->composer('layouts.app', function ($view) {
+            if (config('hexa.app_controls_sidebar', false)) return;
+            $view->getFactory()->startPush('sidebar-menu', view('wordpress::partials.sidebar-menu')->render());
+        });
+    }
 }
