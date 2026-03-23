@@ -4,7 +4,11 @@ namespace hexa_package_wordpress\Providers;
 
 use Illuminate\Support\ServiceProvider;
 use hexa_package_wordpress\Services\WordPressService;
+use hexa_core\Services\PackageRegistryService;
 
+/**
+ * WordPressServiceProvider — registers WordPress package services, routes, views.
+ */
 class WordPressServiceProvider extends ServiceProvider
 {
     /**
@@ -25,19 +29,11 @@ class WordPressServiceProvider extends ServiceProvider
     {
         $this->loadRoutesFrom(__DIR__ . '/../../routes/wordpress.php');
         $this->loadViewsFrom(__DIR__ . '/../../resources/views', 'wordpress');
-        $this->registerSidebarItems();
-    }
 
-    /**
-     * Push sidebar menu items into core layout stacks.
-     *
-     * @return void
-     */
-    private function registerSidebarItems(): void
-    {
-        view()->composer('layouts.app', function ($view) {
-            if (config('hexa.app_controls_sidebar', false)) return;
-            $view->getFactory()->startPush('sidebar-sandbox', view('wordpress::partials.sidebar-menu')->render());
-        });
+        // Sidebar links — registered via PackageRegistryService with auto permission checks
+        if (!config('hexa.app_controls_sidebar', false)) {
+            $registry = app(PackageRegistryService::class);
+            $registry->registerSidebarLink('wordpress.index', 'WordPress', 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253', 'Sandbox', 'wordpress', 87);
+        }
     }
 }
