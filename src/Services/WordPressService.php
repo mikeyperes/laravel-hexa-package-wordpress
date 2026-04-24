@@ -141,14 +141,26 @@ class WordPressService
         $endpoint = rtrim($siteUrl, '/') . "/wp-json/wp/v2/posts/{$postId}";
 
         $payload = [];
-        foreach (['title', 'content', 'status', 'excerpt'] as $field) {
+        foreach (['title', 'content', 'status', 'excerpt', 'date'] as $field) {
             if (isset($postData[$field])) {
                 $payload[$field] = $postData[$field];
             }
         }
 
+        if (!empty($postData['categories'])) {
+            $payload['categories'] = $postData['categories'];
+        }
+
+        if (!empty($postData['tags'])) {
+            $payload['tags'] = $postData['tags'];
+        }
+
         if (!empty($postData['featured_media'])) {
             $payload['featured_media'] = $postData['featured_media'];
+        }
+
+        if (!empty($postData['author']) && is_numeric($postData['author'])) {
+            $payload['author'] = (int) $postData['author'];
         }
 
         try {
@@ -164,7 +176,9 @@ class WordPressService
                     'data' => [
                         'post_id' => $post['id'],
                         'post_url' => $post['link'] ?? null,
-                        'post_status' => $post['status'],
+                        'post_status' => $post['status'] ?? null,
+                        'post_title' => $post['title']['rendered'] ?? '',
+                        'post_date' => $post['date'] ?? null,
                     ],
                 ];
             }
@@ -175,6 +189,49 @@ class WordPressService
 
         } catch (\Exception $e) {
             Log::error('WordPressService::updatePost error', ['url' => $siteUrl, 'postId' => $postId, 'error' => $e->getMessage()]);
+            return ['success' => false, 'message' => 'Error: ' . $e->getMessage(), 'data' => null];
+        }
+    }
+
+    /**
+     * Fetch an existing post from a WordPress site.
+     *
+     * @param string $siteUrl
+     * @param string $username
+     * @param string $appPassword
+     * @param int $postId
+     * @return array{success: bool, message: string, data: array|null}
+     */
+    public function getPost(string $siteUrl, string $username, string $appPassword, int $postId): array
+    {
+        $endpoint = rtrim($siteUrl, '/') . "/wp-json/wp/v2/posts/{$postId}?context=edit";
+
+        try {
+            $response = Http::withBasicAuth($username, $appPassword)
+                ->timeout(30)
+                ->get($endpoint);
+
+            if ($response->successful()) {
+                $post = $response->json();
+                return [
+                    'success' => true,
+                    'message' => "Post fetched (ID: {$post['id']}).",
+                    'data' => [
+                        'post_id' => $post['id'],
+                        'post_url' => $post['link'] ?? null,
+                        'post_status' => $post['status'] ?? null,
+                        'post_title' => $post['title']['rendered'] ?? '',
+                        'post_date' => $post['date'] ?? null,
+                    ],
+                ];
+            }
+
+            $error = $response->json();
+            $errorMsg = $error['message'] ?? "HTTP {$response->status()}";
+            return ['success' => false, 'message' => "WordPress error: {$errorMsg}", 'data' => null];
+
+        } catch (\Exception $e) {
+            Log::error('WordPressService::getPost error', ['url' => $siteUrl, 'postId' => $postId, 'error' => $e->getMessage()]);
             return ['success' => false, 'message' => 'Error: ' . $e->getMessage(), 'data' => null];
         }
     }
