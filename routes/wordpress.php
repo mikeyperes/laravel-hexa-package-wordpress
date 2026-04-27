@@ -2,6 +2,7 @@
 
 use hexa_package_wordpress\Http\Controllers\WordPressController;
 use Illuminate\Support\Facades\Route;
+use hexa_package_user_roles\Http\Middleware\EnsureAdminAccess;
 
 /*
 |--------------------------------------------------------------------------
@@ -9,7 +10,7 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 */
 
-Route::middleware(['web', 'auth', 'locked', 'system_lock', 'two_factor', 'role'])->group(function () {
+Route::middleware(['web', 'auth', 'locked', 'system_lock', 'two_factor', 'role', EnsureAdminAccess::class])->group(function () {
     // Raw dev view
     Route::get('/raw-wordpress', [WordPressController::class, 'raw'])->name('wordpress.index');
 
