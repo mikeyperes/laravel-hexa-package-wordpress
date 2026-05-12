@@ -3,6 +3,7 @@
 namespace hexa_package_wordpress\Providers;
 
 use Illuminate\Support\ServiceProvider;
+use hexa_package_wordpress\Services\WordPressManagerService;
 use hexa_package_wordpress\Services\WordPressService;
 use hexa_core\Services\PackageRegistryService;
 
@@ -18,6 +19,7 @@ class WordPressServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__ . '/../../config/wordpress.php', 'wordpress');
         $this->app->singleton(WordPressService::class);
+        $this->app->singleton(WordPressManagerService::class);
     }
 
     /**
