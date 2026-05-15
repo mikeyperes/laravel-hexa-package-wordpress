@@ -117,6 +117,182 @@ class WordPressManagerService
         return $this->testConnection($target);
     }
 
+    public function inspectPlugin(array $target, string $slug, array $bootstrapCandidates = ['initialization.php', 'plugin.php']): array
+    {
+        $target = $this->normalizeTarget($target);
+        $slug = trim($slug, " \t\n\r\0\x0B/");
+        $bootstrapCandidates = array_values(array_filter(array_map(static fn ($candidate) => trim((string) $candidate), $bootstrapCandidates)));
+
+        if ($slug === '') {
+            return ['success' => false, 'message' => 'Plugin slug is required.', 'plugin' => null];
+        }
+
+        if (!$this->usesWpToolkit($target)) {
+            return [
+                'success' => false,
+                'message' => 'Plugin inspection is only available on WP Toolkit targets.',
+                'plugin' => null,
+            ];
+        }
+
+        $parts = [
+            'require_once ABSPATH . "wp-admin/includes/plugin.php";',
+            '$slug=' . var_export($slug, true) . ';',
+            '$bootstrapCandidates=' . var_export($bootstrapCandidates, true) . ';',
+            '$dir=trailingslashit(WP_PLUGIN_DIR) . $slug;',
+            '$found=is_dir($dir);',
+            '$plugins=$found ? (array) get_plugins($slug) : [];',
+            '$availableFiles=array_values(array_map("strval", array_keys($plugins)));',
+            '$bootstrapFile=""; $pluginFile=""; $pluginData=[];',
+            'foreach ($bootstrapCandidates as $candidate) { if (isset($plugins[$candidate])) { $bootstrapFile=(string) $candidate; $pluginFile=$slug . "/" . $bootstrapFile; $pluginData=(array) $plugins[$candidate]; break; } }',
+            'if ($pluginFile === "" && !empty($plugins)) { $firstKey=array_key_first($plugins); $bootstrapFile=(string) $firstKey; $pluginFile=$slug . "/" . $bootstrapFile; $pluginData=(array) ($plugins[$firstKey] ?? []); }',
+            '$active=$pluginFile !== "" && (is_plugin_active($pluginFile) || (function_exists("is_plugin_active_for_network") && is_plugin_active_for_network($pluginFile)));',
+            '$payload=[',
+            '"slug"=>$slug,',
+            '"found"=>$found,',
+            '"active"=>$active,',
+            '"directory"=>$dir,',
+            '"plugin_file"=>$pluginFile,',
+            '"bootstrap_file"=>$bootstrapFile,',
+            '"available_files"=>$availableFiles,',
+            '"name"=>(string) ($pluginData["Name"] ?? ""),',
+            '"version"=>(string) ($pluginData["Version"] ?? ""),',
+            '"description"=>(string) ($pluginData["Description"] ?? ""),',
+            '"author"=>(string) ($pluginData["Author"] ?? ""),',
+            '];',
+            'echo "HEXA_PLUGIN_INSPECT:" . wp_json_encode($payload);',
+        ];
+
+        $result = $this->evaluatePhp($target, implode('', $parts));
+        if (!($result['success'] ?? false)) {
+            return ['success' => false, 'message' => (string) ($result['message'] ?? 'Plugin inspection failed.'), 'plugin' => null];
+        }
+
+        $payload = $this->decodeMarkedPayload((string) ($result['stdout'] ?? ''), 'HEXA_PLUGIN_INSPECT:');
+        if (!is_array($payload)) {
+            return ['success' => false, 'message' => 'Failed to parse plugin inspection output.', 'plugin' => null];
+        }
+
+        $found = (bool) ($payload['found'] ?? false);
+        $active = (bool) ($payload['active'] ?? false);
+        $message = !$found
+            ? "Plugin {$slug} was not found."
+            : ($active ? "Plugin {$slug} is active." : "Plugin {$slug} is installed but inactive.");
+
+        return [
+            'success' => true,
+            'message' => $message,
+            'plugin' => $payload,
+        ];
+    }
+
+    public function getAcfFieldInventory(array $target, array $groupKeys = [], array $fieldNames = []): array
+    {
+        $target = $this->normalizeTarget($target);
+        $groupKeys = array_values(array_filter(array_map('strval', $groupKeys)));
+        $fieldNames = array_values(array_filter(array_map('strval', $fieldNames)));
+
+        if (!$this->usesWpToolkit($target)) {
+            return [
+                'success' => false,
+                'message' => 'ACF field inventory is only available on WP Toolkit targets.',
+                'groups' => [],
+                'fields_flat' => [],
+            ];
+        }
+
+        $parts = [
+            '$groupKeys=' . var_export($groupKeys, true) . ';',
+            '$fieldNames=' . var_export($fieldNames, true) . ';',
+            'if (!function_exists("acf_get_field_groups") || !function_exists("acf_get_fields")) { echo "HEXA_ACF_INVENTORY:" . wp_json_encode(["success"=>false,"message"=>"ACF field APIs are unavailable.","groups"=>[],"fields_flat"=>[]]); return; }',
+            '$groups=(array) acf_get_field_groups();',
+            '$groupRows=[]; $flat=[];',
+            '$flatten=function(array $fields, string $groupKey, string $groupTitle, string $parentPath = "") use (&$flatten, &$flat, $fieldNames) { $rows=[]; foreach ($fields as $field) { if (!is_array($field)) { continue; } $name=(string) ($field["name"] ?? ""); $path=$parentPath !== "" && $name !== "" ? $parentPath . "." . $name : ($name !== "" ? $name : $parentPath); $row=["group_key"=>$groupKey,"group_title"=>$groupTitle,"field_key"=>(string) ($field["key"] ?? ""),"field_name"=>$name,"field_label"=>(string) ($field["label"] ?? ""),"field_type"=>(string) ($field["type"] ?? ""),"parent_path"=>$parentPath,"path"=>$path,"has_sub_fields"=>!empty($field["sub_fields"]),"instructions"=>(string) ($field["instructions"] ?? "")]; $rows[]=$row; if ($name !== "" && ($fieldNames === [] || in_array($name, $fieldNames, true))) { $flat[]=$row; } if (!empty($field["sub_fields"]) && is_array($field["sub_fields"])) { $rows=array_merge($rows, $flatten($field["sub_fields"], $groupKey, $groupTitle, $path)); } } return $rows; };',
+            'foreach ($groups as $group) { if (!is_array($group)) { continue; } $groupKey=(string) ($group["key"] ?? ""); if ($groupKeys !== [] && !in_array($groupKey, $groupKeys, true)) { continue; } $groupTitle=(string) ($group["title"] ?? $groupKey); $fields=(array) acf_get_fields($group); $flattened=$flatten($fields, $groupKey, $groupTitle); $groupRows[]=["key"=>$groupKey,"title"=>$groupTitle,"field_count"=>count($flattened),"location"=>$group["location"] ?? [],"fields"=>$flattened]; }',
+            'echo "HEXA_ACF_INVENTORY:" . wp_json_encode(["success"=>true,"message"=>count($groupRows) . " field group(s) loaded.","groups"=>$groupRows,"fields_flat"=>$flat]);',
+        ];
+
+        $result = $this->evaluatePhp($target, implode('', $parts));
+        if (!($result['success'] ?? false)) {
+            return ['success' => false, 'message' => (string) ($result['message'] ?? 'Failed to inspect ACF field inventory.'), 'groups' => [], 'fields_flat' => []];
+        }
+
+        $payload = $this->decodeMarkedPayload((string) ($result['stdout'] ?? ''), 'HEXA_ACF_INVENTORY:');
+        if (!is_array($payload)) {
+            return ['success' => false, 'message' => 'Failed to parse ACF inventory output.', 'groups' => [], 'fields_flat' => []];
+        }
+
+        return [
+            'success' => (bool) ($payload['success'] ?? false),
+            'message' => (string) ($payload['message'] ?? 'ACF field inventory loaded.'),
+            'groups' => array_values(array_filter((array) ($payload['groups'] ?? []), 'is_array')),
+            'fields_flat' => array_values(array_filter((array) ($payload['fields_flat'] ?? []), 'is_array')),
+        ];
+    }
+
+    public function getAcfValues(array $target, string $objectType, string|int|null $objectId = null, array $fieldNames = []): array
+    {
+        $target = $this->normalizeTarget($target);
+        $fieldNames = array_values(array_filter(array_map('strval', $fieldNames)));
+
+        if (!$this->usesWpToolkit($target)) {
+            return [
+                'success' => false,
+                'message' => 'ACF value reads are only available on WP Toolkit targets.',
+                'selector' => null,
+                'values' => [],
+                'available_fields' => [],
+            ];
+        }
+
+        $normalizedObjectType = trim(strtolower($objectType));
+        $selector = match ($normalizedObjectType) {
+            'user' => 'user_' . (string) $objectId,
+            'term' => 'term_' . (string) $objectId,
+            'option', 'options' => 'option',
+            'raw' => (string) ($objectId ?? ''),
+            default => (string) ((int) ($objectId ?? 0)),
+        };
+
+        if ($selector === '' || $selector === '0') {
+            return [
+                'success' => false,
+                'message' => 'A valid ACF target selector is required.',
+                'selector' => $selector,
+                'values' => [],
+                'available_fields' => [],
+            ];
+        }
+
+        $parts = [
+            '$selector=' . var_export($selector, true) . ';',
+            '$fieldNames=' . var_export($fieldNames, true) . ';',
+            'if (!function_exists("get_field") || !function_exists("get_field_objects")) { echo "HEXA_ACF_VALUES:" . wp_json_encode(["success"=>false,"message"=>"ACF value APIs are unavailable.","selector"=>$selector,"values"=>[],"available_fields"=>[]]); return; }',
+            '$objects=get_field_objects($selector, false, true, false); if (!is_array($objects)) { $objects=[]; }',
+            '$values=[];',
+            'if ($fieldNames !== []) { foreach ($fieldNames as $fieldName) { $values[$fieldName]=get_field($fieldName, $selector, false); } } else { foreach ($objects as $fieldName => $field) { $values[(string) $fieldName]=$field["value"] ?? get_field((string) $fieldName, $selector, false); } }',
+            'echo "HEXA_ACF_VALUES:" . wp_json_encode(["success"=>true,"message"=>count($values) . " ACF value(s) loaded.","selector"=>$selector,"values"=>$values,"available_fields"=>array_values(array_map("strval", array_keys($objects)))]);',
+        ];
+
+        $result = $this->evaluatePhp($target, implode('', $parts));
+        if (!($result['success'] ?? false)) {
+            return ['success' => false, 'message' => (string) ($result['message'] ?? 'Failed to load ACF values.'), 'selector' => $selector, 'values' => [], 'available_fields' => []];
+        }
+
+        $payload = $this->decodeMarkedPayload((string) ($result['stdout'] ?? ''), 'HEXA_ACF_VALUES:');
+        if (!is_array($payload)) {
+            return ['success' => false, 'message' => 'Failed to parse ACF values output.', 'selector' => $selector, 'values' => [], 'available_fields' => []];
+        }
+
+        return [
+            'success' => (bool) ($payload['success'] ?? false),
+            'message' => (string) ($payload['message'] ?? 'ACF values loaded.'),
+            'selector' => (string) ($payload['selector'] ?? $selector),
+            'values' => is_array($payload['values'] ?? null) ? $payload['values'] : [],
+            'available_fields' => array_values(array_map('strval', (array) ($payload['available_fields'] ?? []))),
+        ];
+    }
+
     public function listAuthors(array $target, bool $forceRefresh = false): array
     {
         $target = $this->normalizeTarget($target);
@@ -382,6 +558,7 @@ class WordPressManagerService
             "content" => $content,
             "status" => $status,
         ]));
+        $postType = trim((string) ($payload["post_type"] ?? "post")) ?: "post";
 
         if ($this->usesWpToolkit($target)) {
             $result = $this->wptoolkit->wpCliCreatePost(
@@ -395,6 +572,7 @@ class WordPressManagerService
                 $payload["date"] ?? null,
                 $payload["author"] ?? ($target["default_author"] ?: null),
                 isset($payload["featured_media"]) ? (int) $payload["featured_media"] : null,
+                $postType,
             );
 
             if (($result["success"] ?? false) && !empty($result["data"]["post_id"]) && !empty($payload["taxonomies"])) {
@@ -406,7 +584,8 @@ class WordPressManagerService
             return $result;
         }
 
-        $response = $this->restRequest($target, "post", "posts", $this->buildRestPostPayload($payload));
+        $endpoint = $postType === "post" ? "posts" : trim($postType, "/");
+        $response = $this->restRequest($target, "post", $endpoint, $this->buildRestPostPayload($payload));
         if (!($response["success"] ?? false)) {
             return ["success" => false, "message" => (string) ($response["message"] ?? "REST publish failed."), "data" => null];
         }
@@ -640,7 +819,7 @@ class WordPressManagerService
 
     private function normalizePostPayload(array $payload): array
     {
-        $standardKeys = ["title", "content", "status", "excerpt", "date", "featured_media", "featured_media_id", "author", "categories", "category_ids", "tags", "tag_ids", "taxonomies"];
+        $standardKeys = ["title", "content", "status", "excerpt", "date", "featured_media", "featured_media_id", "author", "categories", "category_ids", "tags", "tag_ids", "taxonomies", "post_type"];
         $taxonomies = (array) ($payload["taxonomies"] ?? []);
 
         foreach ($payload as $key => $value) {
@@ -656,6 +835,7 @@ class WordPressManagerService
             "title" => (string) ($payload["title"] ?? ""),
             "content" => (string) ($payload["content"] ?? ""),
             "status" => (string) ($payload["status"] ?? "draft"),
+            "post_type" => trim((string) ($payload["post_type"] ?? "post")) ?: "post",
             "excerpt" => array_key_exists("excerpt", $payload) ? (string) ($payload["excerpt"] ?? "") : null,
             "date" => array_key_exists("date", $payload) ? ($payload["date"] !== null ? (string) $payload["date"] : null) : null,
             "featured_media" => isset($payload["featured_media"]) ? (int) $payload["featured_media"] : (isset($payload["featured_media_id"]) ? (int) $payload["featured_media_id"] : null),
