@@ -35,9 +35,6 @@ class WordPressManagerService
             "install_id" => $installId > 0 ? $installId : null,
             "default_author" => (string) ($target["default_author"] ?? ""),
             "site_id" => isset($target["site_id"]) ? (int) $target["site_id"] : null,
-            "wp_path" => rtrim((string) ($target["wp_path"] ?? $target["path"] ?? ""), "/"),
-            "cpanel_user" => (string) ($target["cpanel_user"] ?? $target["username_cpanel"] ?? ""),
-            "login_url" => (string) ($target["login_url"] ?? ""),
         ];
     }
 
@@ -105,103 +102,6 @@ class WordPressManagerService
         return $this->wptoolkit->getInstallsForAccount($server, $cpanelUsername);
     }
 
-    public function getInstallInfo(array $target): array
-    {
-        $target = $this->normalizeTarget($target);
-        if (!$this->usesWpToolkit($target)) {
-            return ["success" => false, "message" => "Install info is only available through WP Toolkit.", "install" => null];
-        }
-
-        $ssh = $this->wptoolkit->getConnection($target["server"]);
-        if (empty($ssh["success"]) || empty($ssh["connection"])) {
-            return ["success" => false, "message" => (string) ($ssh["error"] ?? "WP Toolkit connection failed."), "install" => null];
-        }
-
-        $connection = $ssh["connection"];
-        try {
-            $command = $this->wptoolkit->shellBinary($connection, $target["server"])
-                . " --info -instance-id " . escapeshellarg((string) $target["install_id"])
-                . " -format json 2>&1";
-            $output = trim((string) $connection->exec($command));
-        } catch (\Throwable $e) {
-            $this->wptoolkit->disconnectCachedConnection($target["server"]);
-            return ["success" => false, "message" => $e->getMessage(), "install" => null];
-        }
-
-        $this->wptoolkit->disconnectCachedConnection($target["server"]);
-        $jsonStart = null;
-        for ($i = 0; $i < strlen($output); $i++) {
-            if ($output[$i] === "{" || $output[$i] === "[") {
-                $jsonStart = $i;
-                break;
-            }
-        }
-        if ($jsonStart === null) {
-            return ["success" => false, "message" => "WP Toolkit did not return install JSON.", "install" => null];
-        }
-
-        $decoded = json_decode(substr($output, $jsonStart), true);
-        if (!is_array($decoded)) {
-            return ["success" => false, "message" => "Failed to decode WP Toolkit install info.", "install" => null];
-        }
-        if (isset($decoded[0]) && is_array($decoded[0])) {
-            $decoded = $decoded[0];
-        }
-
-        $path = rtrim((string) ($decoded["fullPath"] ?? $decoded["path"] ?? $decoded["documentRoot"] ?? ""), "/");
-        $url = rtrim((string) ($decoded["siteUrl"] ?? $decoded["url"] ?? ""), "/");
-        if ($path === "" || $url === "") {
-            return ["success" => false, "message" => "Install info is missing path or url.", "install" => null];
-        }
-
-        $install = [
-            "id" => (string) ($decoded["id"] ?? $target["install_id"] ?? ""),
-            "name" => (string) ($decoded["name"] ?? ""),
-            "path" => $path,
-            "url" => $url,
-            "login_url" => (string) ($decoded["loginUrl"] ?? ""),
-            "version" => (string) ($decoded["version"] ?? $decoded["wpVersion"] ?? ""),
-            "admin_user" => (string) ($decoded["adminLogin"] ?? $decoded["adminUser"] ?? ""),
-        ];
-
-        return ["success" => true, "message" => "Install info loaded via WP Toolkit.", "install" => $install];
-    }
-
-    public function getCredentials(array $target): array
-    {
-        $target = $this->normalizeTarget($target);
-        if (!$this->usesWpToolkit($target)) {
-            return ["success" => false, "message" => "Stored credentials are only available through WP Toolkit."];
-        }
-
-        return $this->wptoolkit->getCredentials(
-            $target["server"],
-            (int) $target["install_id"],
-            (string) $target["wp_path"],
-            (string) $target["cpanel_user"],
-            (string) $target["login_url"]
-        );
-    }
-
-    public function generateLoginUrl(array $target, string $wpUser): array
-    {
-        $target = $this->normalizeTarget($target);
-        if (!$this->usesWpToolkit($target)) {
-            return ["success" => false, "message" => "Single-use login URLs are only available through WP Toolkit."];
-        }
-        if ($wpUser === "") {
-            return ["success" => false, "message" => "Missing WordPress username."];
-        }
-
-        return $this->wptoolkit->generateWordPressLoginUrl(
-            $target["server"],
-            (string) $target["wp_path"],
-            (string) $target["cpanel_user"],
-            $wpUser,
-            (string) $target["url"]
-        );
-    }
-
     public function testConnection(array $target): array
     {
         $target = $this->normalizeTarget($target);
@@ -215,6 +115,182 @@ class WordPressManagerService
     public function testWriteAccess(array $target): array
     {
         return $this->testConnection($target);
+    }
+
+    public function inspectPlugin(array $target, string $slug, array $bootstrapCandidates = ['initialization.php', 'plugin.php']): array
+    {
+        $target = $this->normalizeTarget($target);
+        $slug = trim($slug, " \t\n\r\0\x0B/");
+        $bootstrapCandidates = array_values(array_filter(array_map(static fn ($candidate) => trim((string) $candidate), $bootstrapCandidates)));
+
+        if ($slug === '') {
+            return ['success' => false, 'message' => 'Plugin slug is required.', 'plugin' => null];
+        }
+
+        if (!$this->usesWpToolkit($target)) {
+            return [
+                'success' => false,
+                'message' => 'Plugin inspection is only available on WP Toolkit targets.',
+                'plugin' => null,
+            ];
+        }
+
+        $parts = [
+            'require_once ABSPATH . "wp-admin/includes/plugin.php";',
+            '$slug=' . var_export($slug, true) . ';',
+            '$bootstrapCandidates=' . var_export($bootstrapCandidates, true) . ';',
+            '$dir=trailingslashit(WP_PLUGIN_DIR) . $slug;',
+            '$found=is_dir($dir);',
+            '$plugins=$found ? (array) get_plugins($slug) : [];',
+            '$availableFiles=array_values(array_map("strval", array_keys($plugins)));',
+            '$bootstrapFile=""; $pluginFile=""; $pluginData=[];',
+            'foreach ($bootstrapCandidates as $candidate) { if (isset($plugins[$candidate])) { $bootstrapFile=(string) $candidate; $pluginFile=$slug . "/" . $bootstrapFile; $pluginData=(array) $plugins[$candidate]; break; } }',
+            'if ($pluginFile === "" && !empty($plugins)) { $firstKey=array_key_first($plugins); $bootstrapFile=(string) $firstKey; $pluginFile=$slug . "/" . $bootstrapFile; $pluginData=(array) ($plugins[$firstKey] ?? []); }',
+            '$active=$pluginFile !== "" && (is_plugin_active($pluginFile) || (function_exists("is_plugin_active_for_network") && is_plugin_active_for_network($pluginFile)));',
+            '$payload=[',
+            '"slug"=>$slug,',
+            '"found"=>$found,',
+            '"active"=>$active,',
+            '"directory"=>$dir,',
+            '"plugin_file"=>$pluginFile,',
+            '"bootstrap_file"=>$bootstrapFile,',
+            '"available_files"=>$availableFiles,',
+            '"name"=>(string) ($pluginData["Name"] ?? ""),',
+            '"version"=>(string) ($pluginData["Version"] ?? ""),',
+            '"description"=>(string) ($pluginData["Description"] ?? ""),',
+            '"author"=>(string) ($pluginData["Author"] ?? ""),',
+            '];',
+            'echo "HEXA_PLUGIN_INSPECT:" . wp_json_encode($payload);',
+        ];
+
+        $result = $this->evaluatePhp($target, implode('', $parts));
+        if (!($result['success'] ?? false)) {
+            return ['success' => false, 'message' => (string) ($result['message'] ?? 'Plugin inspection failed.'), 'plugin' => null];
+        }
+
+        $payload = $this->decodeMarkedPayload((string) ($result['stdout'] ?? ''), 'HEXA_PLUGIN_INSPECT:');
+        if (!is_array($payload)) {
+            return ['success' => false, 'message' => 'Failed to parse plugin inspection output.', 'plugin' => null];
+        }
+
+        $found = (bool) ($payload['found'] ?? false);
+        $active = (bool) ($payload['active'] ?? false);
+        $message = !$found
+            ? "Plugin {$slug} was not found."
+            : ($active ? "Plugin {$slug} is active." : "Plugin {$slug} is installed but inactive.");
+
+        return [
+            'success' => true,
+            'message' => $message,
+            'plugin' => $payload,
+        ];
+    }
+
+    public function getAcfFieldInventory(array $target, array $groupKeys = [], array $fieldNames = []): array
+    {
+        $target = $this->normalizeTarget($target);
+        $groupKeys = array_values(array_filter(array_map('strval', $groupKeys)));
+        $fieldNames = array_values(array_filter(array_map('strval', $fieldNames)));
+
+        if (!$this->usesWpToolkit($target)) {
+            return [
+                'success' => false,
+                'message' => 'ACF field inventory is only available on WP Toolkit targets.',
+                'groups' => [],
+                'fields_flat' => [],
+            ];
+        }
+
+        $parts = [
+            '$groupKeys=' . var_export($groupKeys, true) . ';',
+            '$fieldNames=' . var_export($fieldNames, true) . ';',
+            'if (!function_exists("acf_get_field_groups") || !function_exists("acf_get_fields")) { echo "HEXA_ACF_INVENTORY:" . wp_json_encode(["success"=>false,"message"=>"ACF field APIs are unavailable.","groups"=>[],"fields_flat"=>[]]); return; }',
+            '$groups=(array) acf_get_field_groups();',
+            '$groupRows=[]; $flat=[];',
+            '$flatten=function(array $fields, string $groupKey, string $groupTitle, string $parentPath = "") use (&$flatten, &$flat, $fieldNames) { $rows=[]; foreach ($fields as $field) { if (!is_array($field)) { continue; } $name=(string) ($field["name"] ?? ""); $path=$parentPath !== "" && $name !== "" ? $parentPath . "." . $name : ($name !== "" ? $name : $parentPath); $row=["group_key"=>$groupKey,"group_title"=>$groupTitle,"field_key"=>(string) ($field["key"] ?? ""),"field_name"=>$name,"field_label"=>(string) ($field["label"] ?? ""),"field_type"=>(string) ($field["type"] ?? ""),"parent_path"=>$parentPath,"path"=>$path,"has_sub_fields"=>!empty($field["sub_fields"]),"instructions"=>(string) ($field["instructions"] ?? "")]; $rows[]=$row; if ($name !== "" && ($fieldNames === [] || in_array($name, $fieldNames, true))) { $flat[]=$row; } if (!empty($field["sub_fields"]) && is_array($field["sub_fields"])) { $rows=array_merge($rows, $flatten($field["sub_fields"], $groupKey, $groupTitle, $path)); } } return $rows; };',
+            'foreach ($groups as $group) { if (!is_array($group)) { continue; } $groupKey=(string) ($group["key"] ?? ""); if ($groupKeys !== [] && !in_array($groupKey, $groupKeys, true)) { continue; } $groupTitle=(string) ($group["title"] ?? $groupKey); $fields=(array) acf_get_fields($group); $flattened=$flatten($fields, $groupKey, $groupTitle); $groupRows[]=["key"=>$groupKey,"title"=>$groupTitle,"field_count"=>count($flattened),"location"=>$group["location"] ?? [],"fields"=>$flattened]; }',
+            'echo "HEXA_ACF_INVENTORY:" . wp_json_encode(["success"=>true,"message"=>count($groupRows) . " field group(s) loaded.","groups"=>$groupRows,"fields_flat"=>$flat]);',
+        ];
+
+        $result = $this->evaluatePhp($target, implode('', $parts));
+        if (!($result['success'] ?? false)) {
+            return ['success' => false, 'message' => (string) ($result['message'] ?? 'Failed to inspect ACF field inventory.'), 'groups' => [], 'fields_flat' => []];
+        }
+
+        $payload = $this->decodeMarkedPayload((string) ($result['stdout'] ?? ''), 'HEXA_ACF_INVENTORY:');
+        if (!is_array($payload)) {
+            return ['success' => false, 'message' => 'Failed to parse ACF inventory output.', 'groups' => [], 'fields_flat' => []];
+        }
+
+        return [
+            'success' => (bool) ($payload['success'] ?? false),
+            'message' => (string) ($payload['message'] ?? 'ACF field inventory loaded.'),
+            'groups' => array_values(array_filter((array) ($payload['groups'] ?? []), 'is_array')),
+            'fields_flat' => array_values(array_filter((array) ($payload['fields_flat'] ?? []), 'is_array')),
+        ];
+    }
+
+    public function getAcfValues(array $target, string $objectType, string|int|null $objectId = null, array $fieldNames = []): array
+    {
+        $target = $this->normalizeTarget($target);
+        $fieldNames = array_values(array_filter(array_map('strval', $fieldNames)));
+
+        if (!$this->usesWpToolkit($target)) {
+            return [
+                'success' => false,
+                'message' => 'ACF value reads are only available on WP Toolkit targets.',
+                'selector' => null,
+                'values' => [],
+                'available_fields' => [],
+            ];
+        }
+
+        $normalizedObjectType = trim(strtolower($objectType));
+        $selector = match ($normalizedObjectType) {
+            'user' => 'user_' . (string) $objectId,
+            'term' => 'term_' . (string) $objectId,
+            'option', 'options' => 'option',
+            'raw' => (string) ($objectId ?? ''),
+            default => (string) ((int) ($objectId ?? 0)),
+        };
+
+        if ($selector === '' || $selector === '0') {
+            return [
+                'success' => false,
+                'message' => 'A valid ACF target selector is required.',
+                'selector' => $selector,
+                'values' => [],
+                'available_fields' => [],
+            ];
+        }
+
+        $parts = [
+            '$selector=' . var_export($selector, true) . ';',
+            '$fieldNames=' . var_export($fieldNames, true) . ';',
+            'if (!function_exists("get_field") || !function_exists("get_field_objects")) { echo "HEXA_ACF_VALUES:" . wp_json_encode(["success"=>false,"message"=>"ACF value APIs are unavailable.","selector"=>$selector,"values"=>[],"available_fields"=>[]]); return; }',
+            '$objects=get_field_objects($selector, false, true, false); if (!is_array($objects)) { $objects=[]; }',
+            '$values=[];',
+            'if ($fieldNames !== []) { foreach ($fieldNames as $fieldName) { $values[$fieldName]=get_field($fieldName, $selector, false); } } else { foreach ($objects as $fieldName => $field) { $values[(string) $fieldName]=$field["value"] ?? get_field((string) $fieldName, $selector, false); } }',
+            'echo "HEXA_ACF_VALUES:" . wp_json_encode(["success"=>true,"message"=>count($values) . " ACF value(s) loaded.","selector"=>$selector,"values"=>$values,"available_fields"=>array_values(array_map("strval", array_keys($objects)))]);',
+        ];
+
+        $result = $this->evaluatePhp($target, implode('', $parts));
+        if (!($result['success'] ?? false)) {
+            return ['success' => false, 'message' => (string) ($result['message'] ?? 'Failed to load ACF values.'), 'selector' => $selector, 'values' => [], 'available_fields' => []];
+        }
+
+        $payload = $this->decodeMarkedPayload((string) ($result['stdout'] ?? ''), 'HEXA_ACF_VALUES:');
+        if (!is_array($payload)) {
+            return ['success' => false, 'message' => 'Failed to parse ACF values output.', 'selector' => $selector, 'values' => [], 'available_fields' => []];
+        }
+
+        return [
+            'success' => (bool) ($payload['success'] ?? false),
+            'message' => (string) ($payload['message'] ?? 'ACF values loaded.'),
+            'selector' => (string) ($payload['selector'] ?? $selector),
+            'values' => is_array($payload['values'] ?? null) ? $payload['values'] : [],
+            'available_fields' => array_values(array_map('strval', (array) ($payload['available_fields'] ?? []))),
+        ];
     }
 
     public function listAuthors(array $target, bool $forceRefresh = false): array
@@ -264,354 +340,6 @@ class WordPressManagerService
         ];
     }
 
-    public function listUsers(array $target, array $filters = []): array
-    {
-        $target = $this->normalizeTarget($target);
-        $filters = [
-            "role" => trim((string) ($filters["role"] ?? "")),
-            "search" => trim((string) ($filters["search"] ?? "")),
-            "include" => array_values(array_unique(array_filter(array_map("intval", (array) ($filters["include"] ?? []))))),
-            "per_page" => max(1, (int) ($filters["per_page"] ?? 100)),
-        ];
-
-        if ($this->usesWpToolkit($target)) {
-            $parts = [
-                '$args=["fields"=>["ID","display_name","user_login","user_email","roles"]];',
-                'if (' . var_export($filters["role"] !== "", true) . ') { $args["role"]=' . var_export($filters["role"], true) . '; }',
-                'if (' . var_export($filters["search"] !== "", true) . ') { $args["search"]=' . var_export($filters["search"] !== "" ? ("*" . $filters["search"] . "*") : "", true) . '; $args["search_columns"]=["user_login","user_email","display_name"]; }',
-                'if (' . var_export($filters["include"] !== [], true) . ') { $args["include"]=' . var_export($filters["include"], true) . '; }',
-                '$users=get_users($args);',
-                '$rows=[];',
-                'foreach ($users as $user) { $rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"roles"=>array_values(array_map("strval", (array) $user->roles))]; }',
-                'echo "HEXA_USER_LIST:" . wp_json_encode($rows);',
-            ];
-            $eval = $this->evaluatePhp($target, implode("", $parts));
-            if (!($eval["success"] ?? false)) {
-                return ["success" => false, "message" => (string) ($eval["message"] ?? "User lookup failed."), "users" => []];
-            }
-            $payload = $this->decodeMarkedPayload((string) ($eval["stdout"] ?? ""), "HEXA_USER_LIST:");
-            if (!is_array($payload)) {
-                return ["success" => false, "message" => "Failed to parse WP Toolkit user list output.", "users" => []];
-            }
-            $users = array_values(array_map([$this, "normalizeUserRow"], array_filter($payload, "is_array")));
-            return ["success" => true, "message" => count($users) . " user(s) loaded via WP Toolkit.", "users" => $users];
-        }
-
-        $query = [
-            "per_page" => $filters["per_page"],
-            "context" => "edit",
-            "_fields" => "id,name,slug,email,roles",
-        ];
-        if ($filters["role"] !== "") {
-            $query["roles"] = $filters["role"];
-        }
-        if ($filters["search"] !== "") {
-            $query["search"] = $filters["search"];
-        }
-        if ($filters["include"] !== []) {
-            $query["include"] = implode(",", $filters["include"]);
-        }
-
-        $response = $this->restRequest($target, "get", "users", [], $query);
-        if (!($response["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($response["message"] ?? "User lookup failed."), "users" => []];
-        }
-
-        $users = array_values(array_map([$this, "normalizeUserRow"], array_filter((array) ($response["data"] ?? []), "is_array")));
-        return ["success" => true, "message" => count($users) . " user(s) loaded via REST.", "users" => $users];
-    }
-    public function createUser(array $target, array $payload): array
-    {
-        $target = $this->normalizeTarget($target);
-        $login = trim((string) ($payload["username"] ?? $payload["user_login"] ?? ""));
-        $email = trim((string) ($payload["email"] ?? $payload["user_email"] ?? ""));
-        $displayName = trim((string) ($payload["display_name"] ?? $payload["name"] ?? ""));
-        $role = trim((string) ($payload["role"] ?? ""));
-        $password = (string) ($payload["password"] ?? $payload["user_pass"] ?? "");
-
-        if ($login === "" || $email === "") {
-            return ["success" => false, "message" => "Username and email are required.", "user" => null];
-        }
-
-        if ($this->usesWpToolkit($target)) {
-            $command = "user create " . escapeshellarg($login) . " " . escapeshellarg($email);
-            if ($displayName !== "") {
-                $command .= " --display_name=" . escapeshellarg($displayName);
-            }
-            if ($role !== "") {
-                $command .= " --role=" . escapeshellarg($role);
-            }
-            $pass = $password !== "" ? $password : bin2hex(random_bytes(8));
-            $command .= " --user_pass=" . escapeshellarg($pass) . " --porcelain";
-            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
-            $stdout = trim((string) ($result["stdout"] ?? ""));
-            if (preg_match("/^\d+$/", $stdout) !== 1) {
-                return ["success" => false, "message" => $stdout !== "" ? $stdout : "User creation failed.", "user" => null];
-            }
-            $userId = (int) $stdout;
-            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1]);
-            return [
-                "success" => true,
-                "message" => "User created via WP Toolkit.",
-                "user" => !empty($users["users"][0]) ? $users["users"][0] : ["id" => $userId, "ID" => $userId, "user_login" => $login, "display_name" => $displayName, "user_email" => $email, "roles" => $role !== "" ? [$role] : []],
-            ];
-        }
-
-        $response = $this->restRequest($target, "post", "users", array_filter([
-            "username" => $login,
-            "email" => $email,
-            "name" => $displayName !== "" ? $displayName : null,
-            "roles" => $role !== "" ? [$role] : null,
-            "password" => $password !== "" ? $password : null,
-        ], static fn ($value) => $value !== null && $value !== [] && $value !== ""));
-
-        if (!($response["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($response["message"] ?? "User creation failed."), "user" => null];
-        }
-
-        return ["success" => true, "message" => "User created via REST.", "user" => $this->normalizeUserRow((array) ($response["data"] ?? []))];
-    }
-
-    public function updateUser(array $target, int $userId, array $payload): array
-    {
-        $target = $this->normalizeTarget($target);
-        if ($userId <= 0) {
-            return ["success" => false, "message" => "User ID is required.", "user" => null];
-        }
-
-        $pieces = [];
-        $displayName = array_key_exists("display_name", $payload) ? trim((string) ($payload["display_name"] ?? "")) : "";
-        $email = array_key_exists("email", $payload) ? trim((string) ($payload["email"] ?? "")) : (array_key_exists("user_email", $payload) ? trim((string) ($payload["user_email"] ?? "")) : "");
-        $role = trim((string) ($payload["role"] ?? ""));
-
-        if ($displayName !== "") {
-            $pieces[] = "--display_name=" . escapeshellarg($displayName);
-        }
-        if ($email !== "") {
-            $pieces[] = "--user_email=" . escapeshellarg($email);
-        }
-
-        if ($this->usesWpToolkit($target)) {
-            if ($pieces !== []) {
-                $command = "user update " . $userId . " " . implode(" ", $pieces);
-                $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
-                $stdout = strtolower(trim((string) ($result["stdout"] ?? "")));
-                if (str_contains($stdout, "error") || str_contains($stdout, "fatal")) {
-                    return ["success" => false, "message" => trim((string) ($result["stdout"] ?? "")) ?: "User update failed.", "user" => null];
-                }
-            }
-            if ($role !== "") {
-                $roleResult = $this->setUserRole($target, $userId, $role);
-                if (!($roleResult["success"] ?? false)) {
-                    return ["success" => false, "message" => (string) ($roleResult["message"] ?? "User role update failed."), "user" => null];
-                }
-            }
-            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1]);
-            return ["success" => true, "message" => "User updated via WP Toolkit.", "user" => $users["users"][0] ?? null];
-        }
-
-        $restPayload = [];
-        if ($displayName !== "") {
-            $restPayload["name"] = $displayName;
-        }
-        if ($email !== "") {
-            $restPayload["email"] = $email;
-        }
-        if ($role !== "") {
-            $restPayload["roles"] = [$role];
-        }
-        $response = $this->restRequest($target, "post", "users/" . $userId, $restPayload);
-        if (!($response["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($response["message"] ?? "User update failed."), "user" => null];
-        }
-
-        return ["success" => true, "message" => "User updated via REST.", "user" => $this->normalizeUserRow((array) ($response["data"] ?? []))];
-    }
-
-    public function deleteUser(array $target, int $userId, ?int $reassignUserId = null): array
-    {
-        $target = $this->normalizeTarget($target);
-        if ($userId <= 0) {
-            return ["success" => false, "message" => "User ID is required."];
-        }
-
-        if ($this->usesWpToolkit($target)) {
-            $command = "user delete " . $userId . " --yes";
-            if ($reassignUserId !== null && $reassignUserId > 0) {
-                $command .= " --reassign=" . $reassignUserId;
-            }
-            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
-            $stdout = strtolower(trim((string) ($result["stdout"] ?? "")));
-            return [
-                "success" => !str_contains($stdout, "error") && !str_contains($stdout, "fatal"),
-                "message" => trim((string) ($result["stdout"] ?? "")) ?: "User deleted via WP Toolkit.",
-            ];
-        }
-
-        $response = $this->restRequest($target, "delete", "users/" . $userId, ["force" => true, "reassign" => $reassignUserId]);
-        return [
-            "success" => (bool) ($response["success"] ?? false),
-            "message" => ($response["success"] ?? false) ? "User deleted via REST." : (string) ($response["message"] ?? "User delete failed."),
-        ];
-    }
-
-    public function setUserRole(array $target, int $userId, string $role): array
-    {
-        $target = $this->normalizeTarget($target);
-        $role = trim($role);
-        if ($userId <= 0 || $role === "") {
-            return ["success" => false, "message" => "User ID and role are required."];
-        }
-
-        if ($this->usesWpToolkit($target)) {
-            $command = "user set-role " . $userId . " " . escapeshellarg($role);
-            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
-            $stdout = strtolower(trim((string) ($result["stdout"] ?? "")));
-            return [
-                "success" => !str_contains($stdout, "error") && !str_contains($stdout, "fatal"),
-                "message" => trim((string) ($result["stdout"] ?? "")) ?: "User role updated via WP Toolkit.",
-            ];
-        }
-
-        return $this->updateUser($target, $userId, ["role" => $role]);
-    }
-
-    public function getUserRole(array $target, int $userId): array
-    {
-        $target = $this->normalizeTarget($target);
-        if ($userId <= 0) {
-            return ["success" => false, "message" => "User ID is required.", "role" => null, "roles" => []];
-        }
-
-        $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1]);
-        if (!($users["success"] ?? false) || empty($users["users"][0])) {
-            return ["success" => false, "message" => (string) ($users["message"] ?? "User not found."), "role" => null, "roles" => []];
-        }
-
-        $roles = array_values(array_map("strval", (array) ($users["users"][0]["roles"] ?? [])));
-        return ["success" => true, "message" => "User role loaded.", "role" => $roles[0] ?? null, "roles" => $roles, "user" => $users["users"][0]];
-    }
-
-    public function updatePostMeta(array $target, int $postId, array $meta): array
-    {
-        $target = $this->normalizeTarget($target);
-        $meta = array_filter($meta, static fn ($value, $key) => is_string($key) && trim($key) !== "", ARRAY_FILTER_USE_BOTH);
-        if ($postId <= 0 || $meta === []) {
-            return ["success" => true, "message" => "No post meta changes were needed."];
-        }
-
-        if ($this->usesWpToolkit($target)) {
-            foreach ($meta as $key => $value) {
-                $php = "update_post_meta(" . $postId . ", " . var_export((string) $key, true) . ", " . var_export($value, true) . "); echo \"HEXA_POST_META_OK\";";
-                $result = $this->evaluatePhp($target, $php);
-                $stdout = trim((string) ($result["stdout"] ?? ""));
-                if (!($result["success"] ?? false) || !str_contains($stdout, "HEXA_POST_META_OK")) {
-                    return ["success" => false, "message" => trim($stdout) !== "" ? trim($stdout) : ((string) ($result["message"] ?? "Post meta update failed."))];
-                }
-            }
-            return ["success" => true, "message" => count($meta) . " post meta field(s) updated via WP Toolkit."];
-        }
-
-        $response = $this->restRequest($target, "post", "posts/" . $postId, ["meta" => $meta]);
-        return [
-            "success" => (bool) ($response["success"] ?? false),
-            "message" => ($response["success"] ?? false) ? "Post meta updated via REST." : (string) ($response["message"] ?? "Post meta update failed."),
-            "data" => is_array($response["data"] ?? null) ? $response["data"] : null,
-        ];
-    }
-
-    public function getPostDetailsByIds(array $target, array $postIds): array
-    {
-        $target = $this->normalizeTarget($target);
-        $postIds = array_values(array_unique(array_filter(array_map("intval", $postIds))));
-        if ($postIds === []) {
-            return ["success" => true, "message" => "No post IDs requested.", "posts" => []];
-        }
-
-        if ($this->usesWpToolkit($target)) {
-            $posts = [];
-            foreach ($postIds as $postId) {
-                $php = <<<'PHP'
-$postId=__POST_ID__;
-$post=get_post((int) $postId);
-if (!$post) {
-    echo "HEXA_POST_DETAIL:null";
-    return;
-}
-$author=get_userdata((int) $post->post_author);
-$featuredId=(int) get_post_thumbnail_id($postId);
-$meta=get_post_meta($postId);
-$flatMeta=[];
-foreach ((array) $meta as $key => $value) {
-    $flatMeta[(string) $key] = is_array($value) && count($value) === 1 ? $value[0] : $value;
-}
-$sizes=[];
-if ($featuredId > 0) {
-    foreach (["full", "large", "medium", "thumbnail"] as $size) {
-        $src = wp_get_attachment_image_url($featuredId, $size);
-        if ($src) {
-            $sizes[$size] = $src;
-        }
-    }
-}
-echo "HEXA_POST_DETAIL:" . wp_json_encode([
-    "id" => (int) $postId,
-    "post_id" => (int) $postId,
-    "post_title" => (string) get_the_title($postId),
-    "post_name" => (string) $post->post_name,
-    "post_status" => (string) $post->post_status,
-    "post_date" => (string) $post->post_date,
-    "post_modified" => (string) $post->post_modified,
-    "permalink" => (string) get_permalink($postId),
-    "edit_url" => (string) get_edit_post_link($postId, ""),
-    "author_id" => (int) $post->post_author,
-    "author_name" => (string) ($author->display_name ?? ""),
-    "featured_image_id" => $featuredId > 0 ? $featuredId : null,
-    "featured_image_url" => $featuredId > 0 ? (string) wp_get_attachment_url($featuredId) : null,
-    "image_sizes" => $sizes,
-    "meta" => $flatMeta,
-]);
-PHP;
-                $php = str_replace("__POST_ID__", (string) ((int) $postId), $php);
-                $result = $this->evaluatePhp($target, $php);
-                if (!($result["success"] ?? false)) {
-                    return ["success" => false, "message" => (string) ($result["message"] ?? "Post detail lookup failed."), "posts" => []];
-                }
-                $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_POST_DETAIL:");
-                if (is_array($payload) && !empty($payload["post_id"])) {
-                    $posts[(int) $payload["post_id"]] = $payload;
-                }
-            }
-            return ["success" => true, "message" => count($posts) . " post detail row(s) loaded via WP Toolkit.", "posts" => $posts];
-        }
-
-        $posts = [];
-        foreach ($postIds as $postId) {
-            $response = $this->restRequest($target, "get", "posts/" . $postId, [], ["context" => "edit"]);
-            if (!($response["success"] ?? false) || !is_array($response["data"] ?? null)) {
-                continue;
-            }
-            $data = (array) $response["data"];
-            $posts[$postId] = [
-                "id" => $postId,
-                "post_id" => $postId,
-                "post_title" => (string) (($data["title"]["rendered"] ?? $data["title"] ?? "") ?: ""),
-                "post_name" => (string) ($data["slug"] ?? ""),
-                "post_status" => (string) ($data["status"] ?? ""),
-                "post_date" => (string) ($data["date"] ?? ""),
-                "post_modified" => (string) ($data["modified"] ?? ""),
-                "permalink" => (string) ($data["link"] ?? ""),
-                "edit_url" => "",
-                "author_id" => (int) ($data["author"] ?? 0),
-                "author_name" => "",
-                "featured_image_id" => isset($data["featured_media"]) ? (int) $data["featured_media"] : null,
-                "featured_image_url" => "",
-                "image_sizes" => [],
-                "meta" => (array) ($data["meta"] ?? []),
-            ];
-        }
-        return ["success" => true, "message" => count($posts) . " post detail row(s) loaded via REST.", "posts" => $posts];
-    }
     public function resolvePreferredTaxonomy(array $target, array $candidates = ["publication", "category"]): array
     {
         $target = $this->normalizeTarget($target);
@@ -830,36 +558,33 @@ PHP;
             "content" => $content,
             "status" => $status,
         ]));
+        $postType = trim((string) ($payload["post_type"] ?? "post")) ?: "post";
 
         if ($this->usesWpToolkit($target)) {
-            $postType = (string) ($payload["post_type"] ?? "post");
-            if ($postType === "post") {
-                $result = $this->wptoolkit->wpCliCreatePost(
-                    $target["server"],
-                    (int) $target["install_id"],
-                    (string) ($payload["title"] ?? ""),
-                    (string) ($payload["content"] ?? ""),
-                    (string) ($payload["status"] ?? "draft"),
-                    (array) ($payload["categories"] ?? []),
-                    (array) ($payload["tags"] ?? []),
-                    $payload["date"] ?? null,
-                    $payload["author"] ?? ($target["default_author"] ?: null),
-                    isset($payload["featured_media"]) ? (int) $payload["featured_media"] : null,
-                );
+            $result = $this->wptoolkit->wpCliCreatePost(
+                $target["server"],
+                (int) $target["install_id"],
+                (string) ($payload["title"] ?? ""),
+                (string) ($payload["content"] ?? ""),
+                (string) ($payload["status"] ?? "draft"),
+                (array) ($payload["categories"] ?? []),
+                (array) ($payload["tags"] ?? []),
+                $payload["date"] ?? null,
+                $payload["author"] ?? ($target["default_author"] ?: null),
+                isset($payload["featured_media"]) ? (int) $payload["featured_media"] : null,
+                $postType,
+            );
 
-                if (($result["success"] ?? false) && !empty($result["data"]["post_id"]) && !empty($payload["taxonomies"])) {
-                    foreach ((array) $payload["taxonomies"] as $taxonomy => $termIds) {
-                        $this->setPostTerms($target, (int) $result["data"]["post_id"], (string) $taxonomy, (array) $termIds);
-                    }
+            if (($result["success"] ?? false) && !empty($result["data"]["post_id"]) && !empty($payload["taxonomies"])) {
+                foreach ((array) $payload["taxonomies"] as $taxonomy => $termIds) {
+                    $this->setPostTerms($target, (int) $result["data"]["post_id"], (string) $taxonomy, (array) $termIds);
                 }
-
-                return $result;
             }
 
-            return $this->createToolkitPost($target, $payload);
+            return $result;
         }
 
-        $endpoint = $this->restPostEndpoint((string) ($payload["post_type"] ?? "post"), $payload["rest_endpoint"] ?? null);
+        $endpoint = $postType === "post" ? "posts" : trim($postType, "/");
         $response = $this->restRequest($target, "post", $endpoint, $this->buildRestPostPayload($payload));
         if (!($response["success"] ?? false)) {
             return ["success" => false, "message" => (string) ($response["message"] ?? "REST publish failed."), "data" => null];
@@ -883,8 +608,7 @@ PHP;
             return $result;
         }
 
-        $endpoint = $this->restPostEndpoint((string) ($payload["post_type"] ?? "post"), $payload["rest_endpoint"] ?? null);
-        $response = $this->restRequest($target, "post", $endpoint . "/" . $postId, $this->buildRestPostPayload($payload));
+        $response = $this->restRequest($target, "post", "posts/" . $postId, $this->buildRestPostPayload($payload));
         if (!($response["success"] ?? false)) {
             return ["success" => false, "message" => (string) ($response["message"] ?? "REST update failed."), "data" => null];
         }
@@ -895,12 +619,11 @@ PHP;
     public function getPost(array $target, int $postId, string $postType = "posts"): array
     {
         $target = $this->normalizeTarget($target);
-        if ($this->usesWpToolkit($target)) {
+        if ($this->usesWpToolkit($target) && $postType === "posts") {
             return $this->wptoolkit->wpCliGetPost($target["server"], (int) $target["install_id"], $postId);
         }
 
-        $endpoint = $this->restPostEndpoint($postType);
-        $response = $this->restRequest($target, "get", $endpoint . "/" . $postId, [], ["context" => "edit"]);
+        $response = $this->restRequest($target, "get", trim($postType, "/") . "/" . $postId, [], ["context" => "edit"]);
         if (!($response["success"] ?? false)) {
             return ["success" => false, "message" => (string) ($response["message"] ?? "REST fetch failed."), "data" => null];
         }
@@ -967,9 +690,6 @@ PHP;
     {
         $target = $this->normalizeTarget($target);
         if ($this->usesWpToolkit($target)) {
-            if (is_file($filePath)) {
-                return $this->uploadToolkitLocalFile($target, $filePath, $fileName, $altText, $caption, $description);
-            }
             return $this->wptoolkit->wpCliUploadMedia($target["server"], (int) $target["install_id"], $filePath, $fileName, $altText, $caption, $description);
         }
 
@@ -1010,12 +730,11 @@ PHP;
     public function deletePost(array $target, int $postId, bool $force = true, string $postType = "posts"): array
     {
         $target = $this->normalizeTarget($target);
-        if ($this->usesWpToolkit($target)) {
+        if ($this->usesWpToolkit($target) && $postType === "posts") {
             return $this->wptoolkit->wpCliDeletePost($target["server"], (int) $target["install_id"], $postId, $force);
         }
 
-        $endpoint = $this->restPostEndpoint($postType);
-        $response = $this->restRequest($target, "delete", $endpoint . "/" . $postId, ["force" => $force]);
+        $response = $this->restRequest($target, "delete", trim($postType, "/") . "/" . $postId, ["force" => $force]);
         return [
             "success" => (bool) ($response["success"] ?? false),
             "message" => ($response["success"] ?? false) ? "Post deleted via REST." : (string) ($response["message"] ?? "Post delete failed."),
@@ -1100,7 +819,7 @@ PHP;
 
     private function normalizePostPayload(array $payload): array
     {
-        $standardKeys = ["title", "content", "status", "excerpt", "date", "featured_media", "featured_media_id", "author", "categories", "category_ids", "tags", "tag_ids", "taxonomies", "post_type", "rest_endpoint"];
+        $standardKeys = ["title", "content", "status", "excerpt", "date", "featured_media", "featured_media_id", "author", "categories", "category_ids", "tags", "tag_ids", "taxonomies", "post_type"];
         $taxonomies = (array) ($payload["taxonomies"] ?? []);
 
         foreach ($payload as $key => $value) {
@@ -1116,6 +835,7 @@ PHP;
             "title" => (string) ($payload["title"] ?? ""),
             "content" => (string) ($payload["content"] ?? ""),
             "status" => (string) ($payload["status"] ?? "draft"),
+            "post_type" => trim((string) ($payload["post_type"] ?? "post")) ?: "post",
             "excerpt" => array_key_exists("excerpt", $payload) ? (string) ($payload["excerpt"] ?? "") : null,
             "date" => array_key_exists("date", $payload) ? ($payload["date"] !== null ? (string) $payload["date"] : null) : null,
             "featured_media" => isset($payload["featured_media"]) ? (int) $payload["featured_media"] : (isset($payload["featured_media_id"]) ? (int) $payload["featured_media_id"] : null),
@@ -1123,8 +843,6 @@ PHP;
             "categories" => array_values(array_unique(array_filter(array_map("intval", (array) ($payload["categories"] ?? $payload["category_ids"] ?? []))))),
             "tags" => array_values(array_unique(array_filter(array_map("intval", (array) ($payload["tags"] ?? $payload["tag_ids"] ?? []))))),
             "taxonomies" => $taxonomies,
-            "post_type" => (string) ($payload["post_type"] ?? $payload["type"] ?? "post"),
-            "rest_endpoint" => array_key_exists("rest_endpoint", $payload) ? (string) ($payload["rest_endpoint"] ?? "") : null,
         ];
     }
 
@@ -1146,124 +864,6 @@ PHP;
             $data["featured_media"] = (int) $payload["featured_media"];
         }
         return $data;
-    }
-
-    private function createToolkitPost(array $target, array $payload): array
-    {
-        $php = <<<'PHP'
-$payload = __PAYLOAD__ ;
-$post = [
-    "post_title" => (string) ($payload["title"] ?? ""),
-    "post_content" => (string) ($payload["content"] ?? ""),
-    "post_status" => (string) (($payload["status"] ?? "draft") ?: "draft"),
-    "post_type" => (string) (($payload["post_type"] ?? "post") ?: "post"),
-];
-if (array_key_exists("excerpt", $payload) && $payload["excerpt"] !== null) {
-    $post["post_excerpt"] = (string) $payload["excerpt"];
-}
-if (!empty($payload["date"])) {
-    $post["post_date"] = (string) $payload["date"];
-}
-$author = $payload["author"] ?? null;
-if ($author !== null && $author !== "") {
-    if (is_numeric($author)) {
-        $post["post_author"] = (int) $author;
-    } else {
-        $user = get_user_by("login", (string) $author);
-        if ($user) {
-            $post["post_author"] = (int) $user->ID;
-        }
-    }
-}
-$postId = wp_insert_post($post, true);
-if (is_wp_error($postId)) {
-    echo "HEXA_TOOLKIT_CREATE:" . wp_json_encode(["success" => false, "message" => $postId->get_error_message()]);
-    return;
-}
-if (!empty($payload["categories"])) {
-    wp_set_post_terms($postId, array_values(array_filter(array_map("intval", (array) $payload["categories"]))), "category", false);
-}
-if (!empty($payload["tags"])) {
-    wp_set_post_terms($postId, array_values(array_filter(array_map("intval", (array) $payload["tags"]))), "post_tag", false);
-}
-foreach ((array) ($payload["taxonomies"] ?? []) as $taxonomy => $termIds) {
-    $taxonomy = (string) $taxonomy;
-    if (!taxonomy_exists($taxonomy)) {
-        continue;
-    }
-    $cleanIds = array_values(array_filter(array_map("intval", (array) $termIds)));
-    if ($cleanIds !== []) {
-        wp_set_post_terms($postId, $cleanIds, $taxonomy, false);
-    }
-}
-if (!empty($payload["featured_media"])) {
-    update_post_meta($postId, "_thumbnail_id", (int) $payload["featured_media"]);
-}
-echo "HEXA_TOOLKIT_CREATE:" . wp_json_encode([
-    "success" => true,
-    "data" => [
-        "post_id" => (int) $postId,
-        "post_url" => (string) (get_permalink($postId) ?: ""),
-        "post_status" => (string) get_post_status($postId),
-        "post_title" => (string) get_the_title($postId),
-        "post_date" => (string) get_post_field("post_date", $postId),
-    ],
-]);
-PHP;
-        $php = str_replace("__PAYLOAD__", var_export($payload, true), $php);
-        $result = $this->evaluatePhp($target, $php);
-        if (!($result["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($result["message"] ?? "WP Toolkit post create failed."), "data" => null];
-        }
-        $parsed = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_TOOLKIT_CREATE:");
-        if (!is_array($parsed) || !($parsed["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($parsed["message"] ?? "Failed to parse WP Toolkit post create output."), "data" => null];
-        }
-        return ["success" => true, "message" => "Post created via WP Toolkit.", "data" => is_array($parsed["data"] ?? null) ? $parsed["data"] : null];
-    }
-
-    private function uploadToolkitLocalFile(array $target, string $filePath, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
-    {
-        $target = $this->normalizeTarget($target);
-        if (!$this->isLocalWhmServerTarget($target)) {
-            return ["success" => false, "message" => "Toolkit local file uploads require a same-server WordPress target."];
-        }
-        if (!is_file($filePath) || !is_readable($filePath)) {
-            return ["success" => false, "message" => "Local media file does not exist or is not readable."];
-        }
-
-        return $this->wptoolkit->wpCliImportLocalMediaFile(
-            $target["server"],
-            (int) $target["install_id"],
-            $filePath,
-            $fileName,
-            $altText,
-            $caption,
-            $description,
-        );
-    }
-
-    private function restPostEndpoint(string $postType, ?string $customEndpoint = null): string
-    {
-        $customEndpoint = trim((string) $customEndpoint);
-        if ($customEndpoint !== "") {
-            return trim($customEndpoint, "/");
-        }
-
-        $postType = trim((string) $postType, "/");
-        if ($postType === "" || $postType === "post" || $postType === "posts") {
-            return "posts";
-        }
-
-        return $postType;
-    }
-
-    private function isLocalWhmServerTarget(array $target): bool
-    {
-        $target = $this->normalizeTarget($target);
-        return $this->usesWpToolkit($target)
-            && $target["server"] instanceof WhmServer
-            && $this->wptoolkit->isSameHostServer($target["server"]);
     }
 
     private function buildRestPostPayload(array $payload): array
@@ -1354,18 +954,6 @@ PHP;
         return is_array($payload) ? array_values(array_map([$this, "normalizeTermRow"], array_filter($payload, "is_array"))) : [];
     }
 
-    private function normalizeUserRow(array $user): array
-    {
-        return [
-            "id" => (int) ($user["id"] ?? $user["ID"] ?? 0),
-            "ID" => (int) ($user["ID"] ?? $user["id"] ?? 0),
-            "user_login" => (string) ($user["user_login"] ?? $user["slug"] ?? ""),
-            "display_name" => (string) ($user["display_name"] ?? $user["name"] ?? ""),
-            "user_email" => (string) ($user["user_email"] ?? $user["email"] ?? ""),
-            "roles" => array_values(array_map("strval", (array) ($user["roles"] ?? []))),
-        ];
-    }
-
     private function normalizeTermRow(array $term): array
     {
         return [
@@ -1436,4 +1024,464 @@ PHP;
 
         return null;
     }
+    // ===== code-side unique methods (preserved during 3-way merge) =====
+
+    // === createToolkitPost ===
+private function createToolkitPost(array $target, array $payload): array
+    {
+        $php = <<<'PHP'
+$payload = __PAYLOAD__ ;
+$post = [
+    "post_title" => (string) ($payload["title"] ?? ""),
+    "post_content" => (string) ($payload["content"] ?? ""),
+    "post_status" => (string) (($payload["status"] ?? "draft") ?: "draft"),
+    "post_type" => (string) (($payload["post_type"] ?? "post") ?: "post"),
+];
+if (array_key_exists("excerpt", $payload) && $payload["excerpt"] !== null) {
+    $post["post_excerpt"] = (string) $payload["excerpt"];
+
+    // === isLocalWhmServerTarget ===
+private function isLocalWhmServerTarget(array $target): bool
+    {
+        $target = $this->normalizeTarget($target);
+        return $this->usesWpToolkit($target)
+            && $target["server"] instanceof WhmServer
+            && $this->wptoolkit->isSameHostServer($target["server"]);
+    }
+
+    // === normalizeUserRow ===
+private function normalizeUserRow(array $user): array
+    {
+        return [
+            "id" => (int) ($user["id"] ?? $user["ID"] ?? 0),
+            "ID" => (int) ($user["ID"] ?? $user["id"] ?? 0),
+            "user_login" => (string) ($user["user_login"] ?? $user["slug"] ?? ""),
+            "display_name" => (string) ($user["display_name"] ?? $user["name"] ?? ""),
+            "user_email" => (string) ($user["user_email"] ?? $user["email"] ?? ""),
+            "roles" => array_values(array_map("strval", (array) ($user["roles"] ?? []))),
+        ];
+    }
+
+    // === restPostEndpoint ===
+private function restPostEndpoint(string $postType, ?string $customEndpoint = null): string
+    {
+        $customEndpoint = trim((string) $customEndpoint);
+        if ($customEndpoint !== "") {
+            return trim($customEndpoint, "/");
+        }
+
+        $postType = trim((string) $postType, "/");
+        if ($postType === "" || $postType === "post" || $postType === "posts") {
+            return "posts";
+        }
+
+        return $postType;
+    }
+
+    // === uploadToolkitLocalFile ===
+private function uploadToolkitLocalFile(array $target, string $filePath, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
+    {
+        $target = $this->normalizeTarget($target);
+        if (!$this->isLocalWhmServerTarget($target)) {
+            return ["success" => false, "message" => "Toolkit local file uploads require a same-server WordPress target."];
+        }
+        if (!is_file($filePath) || !is_readable($filePath)) {
+            return ["success" => false, "message" => "Local media file does not exist or is not readable."];
+        }
+
+        return $this->wptoolkit->wpCliImportLocalMediaFile(
+            $target["server"],
+            (int) $target["install_id"],
+            $filePath,
+            $fileName,
+            $altText,
+            $caption,
+            $description,
+        );
+    }
+
+    // === createUser ===
+public function createUser(array $target, array $payload): array
+    {
+        $target = $this->normalizeTarget($target);
+        $login = trim((string) ($payload["username"] ?? $payload["user_login"] ?? ""));
+        $email = trim((string) ($payload["email"] ?? $payload["user_email"] ?? ""));
+        $displayName = trim((string) ($payload["display_name"] ?? $payload["name"] ?? ""));
+        $role = trim((string) ($payload["role"] ?? ""));
+        $password = (string) ($payload["password"] ?? $payload["user_pass"] ?? "");
+
+        if ($login === "" || $email === "") {
+            return ["success" => false, "message" => "Username and email are required.", "user" => null];
+        }
+
+        if ($this->usesWpToolkit($target)) {
+            $command = "user create " . escapeshellarg($login) . " " . escapeshellarg($email);
+            if ($displayName !== "") {
+                $command .= " --display_name=" . escapeshellarg($displayName);
+            }
+            if ($role !== "") {
+                $command .= " --role=" . escapeshellarg($role);
+            }
+            $pass = $password !== "" ? $password : bin2hex(random_bytes(8));
+            $command .= " --user_pass=" . escapeshellarg($pass) . " --porcelain";
+            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
+            $stdout = trim((string) ($result["stdout"] ?? ""));
+            if (preg_match("/^\d+$/", $stdout) !== 1) {
+                return ["success" => false, "message" => $stdout !== "" ? $stdout : "User creation failed.", "user" => null];
+            }
+            $userId = (int) $stdout;
+            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1]);
+            return [
+                "success" => true,
+                "message" => "User created via WP Toolkit.",
+                "user" => !empty($users["users"][0]) ? $users["users"][0] : ["id" => $userId, "ID" => $userId, "user_login" => $login, "display_name" => $displayName, "user_email" => $email, "roles" => $role !== "" ? [$role] : []],
+            ];
+        }
+
+        $response = $this->restRequest($target, "post", "users", array_filter([
+            "username" => $login,
+            "email" => $email,
+            "name" => $displayName !== "" ? $displayName : null,
+            "roles" => $role !== "" ? [$role] : null,
+            "password" => $password !== "" ? $password : null,
+        ], static fn ($value) => $value !== null && $value !== [] && $value !== ""));
+
+        if (!($response["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($response["message"] ?? "User creation failed."), "user" => null];
+        }
+
+        return ["success" => true, "message" => "User created via REST.", "user" => $this->normalizeUserRow((array) ($response["data"] ?? []))];
+    }
+
+    // === deleteUser ===
+public function deleteUser(array $target, int $userId, ?int $reassignUserId = null): array
+    {
+        $target = $this->normalizeTarget($target);
+        if ($userId <= 0) {
+            return ["success" => false, "message" => "User ID is required."];
+        }
+
+        if ($this->usesWpToolkit($target)) {
+            $command = "user delete " . $userId . " --yes";
+            if ($reassignUserId !== null && $reassignUserId > 0) {
+                $command .= " --reassign=" . $reassignUserId;
+            }
+            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
+            $stdout = strtolower(trim((string) ($result["stdout"] ?? "")));
+            return [
+                "success" => !str_contains($stdout, "error") && !str_contains($stdout, "fatal"),
+                "message" => trim((string) ($result["stdout"] ?? "")) ?: "User deleted via WP Toolkit.",
+            ];
+        }
+
+        $response = $this->restRequest($target, "delete", "users/" . $userId, ["force" => true, "reassign" => $reassignUserId]);
+        return [
+            "success" => (bool) ($response["success"] ?? false),
+            "message" => ($response["success"] ?? false) ? "User deleted via REST." : (string) ($response["message"] ?? "User delete failed."),
+        ];
+    }
+
+    // === generateLoginUrl ===
+public function generateLoginUrl(array $target, string $wpUser): array
+    {
+        $target = $this->normalizeTarget($target);
+        if (!$this->usesWpToolkit($target)) {
+            return ["success" => false, "message" => "Single-use login URLs are only available through WP Toolkit."];
+        }
+        if ($wpUser === "") {
+            return ["success" => false, "message" => "Missing WordPress username."];
+        }
+
+        return $this->wptoolkit->generateWordPressLoginUrl(
+            $target["server"],
+            (string) $target["wp_path"],
+            (string) $target["cpanel_user"],
+            $wpUser,
+            (string) $target["url"]
+        );
+    }
+
+    // === getCredentials ===
+public function getCredentials(array $target): array
+    {
+        $target = $this->normalizeTarget($target);
+        if (!$this->usesWpToolkit($target)) {
+            return ["success" => false, "message" => "Stored credentials are only available through WP Toolkit."];
+        }
+
+        return $this->wptoolkit->getCredentials(
+            $target["server"],
+            (int) $target["install_id"],
+            (string) $target["wp_path"],
+            (string) $target["cpanel_user"],
+            (string) $target["login_url"]
+        );
+    }
+
+    // === getInstallInfo ===
+public function getInstallInfo(array $target): array
+    {
+        $target = $this->normalizeTarget($target);
+        if (!$this->usesWpToolkit($target)) {
+            return ["success" => false, "message" => "Install info is only available through WP Toolkit.", "install" => null];
+        }
+
+        $ssh = $this->wptoolkit->getConnection($target["server"]);
+        if (empty($ssh["success"]) || empty($ssh["connection"])) {
+            return ["success" => false, "message" => (string) ($ssh["error"] ?? "WP Toolkit connection failed."), "install" => null];
+        }
+
+        $connection = $ssh["connection"];
+        try {
+            $command = $this->wptoolkit->shellBinary($connection, $target["server"])
+                . " --info -instance-id " . escapeshellarg((string) $target["install_id"])
+                . " -format json 2>&1";
+            $output = trim((string) $connection->exec($command));
+        } catch (\Throwable $e) {
+            $this->wptoolkit->disconnectCachedConnection($target["server"]);
+            return ["success" => false, "message" => $e->getMessage(), "install" => null];
+        }
+
+        $this->wptoolkit->disconnectCachedConnection($target["server"]);
+        $jsonStart = null;
+        for ($i = 0; $i < strlen($output); $i++) {
+            if ($output[$i] === "{" || $output[$i] === "[") {
+                $jsonStart = $i;
+                break;
+            }
+        }
+        if ($jsonStart === null) {
+            return ["success" => false, "message" => "WP Toolkit did not return install JSON.", "install" => null];
+        }
+
+        $decoded = json_decode(substr($output, $jsonStart), true);
+        if (!is_array($decoded)) {
+            return ["success" => false, "message" => "Failed to decode WP Toolkit install info.", "install" => null];
+        }
+        if (isset($decoded[0]) && is_array($decoded[0])) {
+            $decoded = $decoded[0];
+        }
+
+        $path = rtrim((string) ($decoded["fullPath"] ?? $decoded["path"] ?? $decoded["documentRoot"] ?? ""), "/");
+        $url = rtrim((string) ($decoded["siteUrl"] ?? $decoded["url"] ?? ""), "/");
+        if ($path === "" || $url === "") {
+            return ["success" => false, "message" => "Install info is missing path or url.", "install" => null];
+        }
+
+        $install = [
+            "id" => (string) ($decoded["id"] ?? $target["install_id"] ?? ""),
+            "name" => (string) ($decoded["name"] ?? ""),
+            "path" => $path,
+            "url" => $url,
+            "login_url" => (string) ($decoded["loginUrl"] ?? ""),
+            "version" => (string) ($decoded["version"] ?? $decoded["wpVersion"] ?? ""),
+            "admin_user" => (string) ($decoded["adminLogin"] ?? $decoded["adminUser"] ?? ""),
+        ];
+
+        return ["success" => true, "message" => "Install info loaded via WP Toolkit.", "install" => $install];
+    }
+
+    // === getPostDetailsByIds ===
+public function getPostDetailsByIds(array $target, array $postIds): array
+    {
+        $target = $this->normalizeTarget($target);
+        $postIds = array_values(array_unique(array_filter(array_map("intval", $postIds))));
+        if ($postIds === []) {
+            return ["success" => true, "message" => "No post IDs requested.", "posts" => []];
+        }
+
+        if ($this->usesWpToolkit($target)) {
+            $posts = [];
+            foreach ($postIds as $postId) {
+                $php = <<<'PHP'
+$postId=__POST_ID__;
+$post=get_post((int) $postId);
+if (!$post) {
+    echo "HEXA_POST_DETAIL:null";
+    return;
+
+    // === getUserRole ===
+public function getUserRole(array $target, int $userId): array
+    {
+        $target = $this->normalizeTarget($target);
+        if ($userId <= 0) {
+            return ["success" => false, "message" => "User ID is required.", "role" => null, "roles" => []];
+        }
+
+        $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1]);
+        if (!($users["success"] ?? false) || empty($users["users"][0])) {
+            return ["success" => false, "message" => (string) ($users["message"] ?? "User not found."), "role" => null, "roles" => []];
+        }
+
+        $roles = array_values(array_map("strval", (array) ($users["users"][0]["roles"] ?? [])));
+        return ["success" => true, "message" => "User role loaded.", "role" => $roles[0] ?? null, "roles" => $roles, "user" => $users["users"][0]];
+    }
+
+    // === listUsers ===
+public function listUsers(array $target, array $filters = []): array
+    {
+        $target = $this->normalizeTarget($target);
+        $filters = [
+            "role" => trim((string) ($filters["role"] ?? "")),
+            "search" => trim((string) ($filters["search"] ?? "")),
+            "include" => array_values(array_unique(array_filter(array_map("intval", (array) ($filters["include"] ?? []))))),
+            "per_page" => max(1, (int) ($filters["per_page"] ?? 100)),
+        ];
+
+        if ($this->usesWpToolkit($target)) {
+            $parts = [
+                '$args=["fields"=>["ID","display_name","user_login","user_email","roles"]];',
+                'if (' . var_export($filters["role"] !== "", true) . ') { $args["role"]=' . var_export($filters["role"], true) . '; }',
+                'if (' . var_export($filters["search"] !== "", true) . ') { $args["search"]=' . var_export($filters["search"] !== "" ? ("*" . $filters["search"] . "*") : "", true) . '; $args["search_columns"]=["user_login","user_email","display_name"]; }',
+                'if (' . var_export($filters["include"] !== [], true) . ') { $args["include"]=' . var_export($filters["include"], true) . '; }',
+                '$users=get_users($args);',
+                '$rows=[];',
+                'foreach ($users as $user) { $rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"roles"=>array_values(array_map("strval", (array) $user->roles))]; }',
+                'echo "HEXA_USER_LIST:" . wp_json_encode($rows);',
+            ];
+            $eval = $this->evaluatePhp($target, implode("", $parts));
+            if (!($eval["success"] ?? false)) {
+                return ["success" => false, "message" => (string) ($eval["message"] ?? "User lookup failed."), "users" => []];
+            }
+            $payload = $this->decodeMarkedPayload((string) ($eval["stdout"] ?? ""), "HEXA_USER_LIST:");
+            if (!is_array($payload)) {
+                return ["success" => false, "message" => "Failed to parse WP Toolkit user list output.", "users" => []];
+            }
+            $users = array_values(array_map([$this, "normalizeUserRow"], array_filter($payload, "is_array")));
+            return ["success" => true, "message" => count($users) . " user(s) loaded via WP Toolkit.", "users" => $users];
+        }
+
+        $query = [
+            "per_page" => $filters["per_page"],
+            "context" => "edit",
+            "_fields" => "id,name,slug,email,roles",
+        ];
+        if ($filters["role"] !== "") {
+            $query["roles"] = $filters["role"];
+        }
+        if ($filters["search"] !== "") {
+            $query["search"] = $filters["search"];
+        }
+        if ($filters["include"] !== []) {
+            $query["include"] = implode(",", $filters["include"]);
+        }
+
+        $response = $this->restRequest($target, "get", "users", [], $query);
+        if (!($response["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($response["message"] ?? "User lookup failed."), "users" => []];
+        }
+
+        $users = array_values(array_map([$this, "normalizeUserRow"], array_filter((array) ($response["data"] ?? []), "is_array")));
+        return ["success" => true, "message" => count($users) . " user(s) loaded via REST.", "users" => $users];
+    }
+
+    // === setUserRole ===
+public function setUserRole(array $target, int $userId, string $role): array
+    {
+        $target = $this->normalizeTarget($target);
+        $role = trim($role);
+        if ($userId <= 0 || $role === "") {
+            return ["success" => false, "message" => "User ID and role are required."];
+        }
+
+        if ($this->usesWpToolkit($target)) {
+            $command = "user set-role " . $userId . " " . escapeshellarg($role);
+            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
+            $stdout = strtolower(trim((string) ($result["stdout"] ?? "")));
+            return [
+                "success" => !str_contains($stdout, "error") && !str_contains($stdout, "fatal"),
+                "message" => trim((string) ($result["stdout"] ?? "")) ?: "User role updated via WP Toolkit.",
+            ];
+        }
+
+        return $this->updateUser($target, $userId, ["role" => $role]);
+    }
+
+    // === updatePostMeta ===
+public function updatePostMeta(array $target, int $postId, array $meta): array
+    {
+        $target = $this->normalizeTarget($target);
+        $meta = array_filter($meta, static fn ($value, $key) => is_string($key) && trim($key) !== "", ARRAY_FILTER_USE_BOTH);
+        if ($postId <= 0 || $meta === []) {
+            return ["success" => true, "message" => "No post meta changes were needed."];
+        }
+
+        if ($this->usesWpToolkit($target)) {
+            foreach ($meta as $key => $value) {
+                $php = "update_post_meta(" . $postId . ", " . var_export((string) $key, true) . ", " . var_export($value, true) . "); echo \"HEXA_POST_META_OK\";";
+                $result = $this->evaluatePhp($target, $php);
+                $stdout = trim((string) ($result["stdout"] ?? ""));
+                if (!($result["success"] ?? false) || !str_contains($stdout, "HEXA_POST_META_OK")) {
+                    return ["success" => false, "message" => trim($stdout) !== "" ? trim($stdout) : ((string) ($result["message"] ?? "Post meta update failed."))];
+                }
+            }
+            return ["success" => true, "message" => count($meta) . " post meta field(s) updated via WP Toolkit."];
+        }
+
+        $response = $this->restRequest($target, "post", "posts/" . $postId, ["meta" => $meta]);
+        return [
+            "success" => (bool) ($response["success"] ?? false),
+            "message" => ($response["success"] ?? false) ? "Post meta updated via REST." : (string) ($response["message"] ?? "Post meta update failed."),
+            "data" => is_array($response["data"] ?? null) ? $response["data"] : null,
+        ];
+    }
+
+    // === updateUser ===
+public function updateUser(array $target, int $userId, array $payload): array
+    {
+        $target = $this->normalizeTarget($target);
+        if ($userId <= 0) {
+            return ["success" => false, "message" => "User ID is required.", "user" => null];
+        }
+
+        $pieces = [];
+        $displayName = array_key_exists("display_name", $payload) ? trim((string) ($payload["display_name"] ?? "")) : "";
+        $email = array_key_exists("email", $payload) ? trim((string) ($payload["email"] ?? "")) : (array_key_exists("user_email", $payload) ? trim((string) ($payload["user_email"] ?? "")) : "");
+        $role = trim((string) ($payload["role"] ?? ""));
+
+        if ($displayName !== "") {
+            $pieces[] = "--display_name=" . escapeshellarg($displayName);
+        }
+        if ($email !== "") {
+            $pieces[] = "--user_email=" . escapeshellarg($email);
+        }
+
+        if ($this->usesWpToolkit($target)) {
+            if ($pieces !== []) {
+                $command = "user update " . $userId . " " . implode(" ", $pieces);
+                $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
+                $stdout = strtolower(trim((string) ($result["stdout"] ?? "")));
+                if (str_contains($stdout, "error") || str_contains($stdout, "fatal")) {
+                    return ["success" => false, "message" => trim((string) ($result["stdout"] ?? "")) ?: "User update failed.", "user" => null];
+                }
+            }
+            if ($role !== "") {
+                $roleResult = $this->setUserRole($target, $userId, $role);
+                if (!($roleResult["success"] ?? false)) {
+                    return ["success" => false, "message" => (string) ($roleResult["message"] ?? "User role update failed."), "user" => null];
+                }
+            }
+            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1]);
+            return ["success" => true, "message" => "User updated via WP Toolkit.", "user" => $users["users"][0] ?? null];
+        }
+
+        $restPayload = [];
+        if ($displayName !== "") {
+            $restPayload["name"] = $displayName;
+        }
+        if ($email !== "") {
+            $restPayload["email"] = $email;
+        }
+        if ($role !== "") {
+            $restPayload["roles"] = [$role];
+        }
+        $response = $this->restRequest($target, "post", "users/" . $userId, $restPayload);
+        if (!($response["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($response["message"] ?? "User update failed."), "user" => null];
+        }
+
+        return ["success" => true, "message" => "User updated via REST.", "user" => $this->normalizeUserRow((array) ($response["data"] ?? []))];
+    }
+
+
 }
