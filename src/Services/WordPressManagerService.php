@@ -141,7 +141,7 @@ class WordPressManagerService
             '$bootstrapCandidates=' . var_export($bootstrapCandidates, true) . ';',
             '$dir=trailingslashit(WP_PLUGIN_DIR) . $slug;',
             '$found=is_dir($dir);',
-            '$plugins=$found ? (array) get_plugins($slug) : [];',
+            '$plugins=$found ? (array) get_plugins("/" . $slug) : [];',
             '$availableFiles=array_values(array_map("strval", array_keys($plugins)));',
             '$bootstrapFile=""; $pluginFile=""; $pluginData=[];',
             'foreach ($bootstrapCandidates as $candidate) { if (isset($plugins[$candidate])) { $bootstrapFile=(string) $candidate; $pluginFile=$slug . "/" . $bootstrapFile; $pluginData=(array) $plugins[$candidate]; break; } }',
@@ -690,6 +690,11 @@ class WordPressManagerService
     {
         $target = $this->normalizeTarget($target);
         if ($this->usesWpToolkit($target)) {
+            $normalizedPath = trim($filePath);
+            if ($normalizedPath !== "" && !filter_var($normalizedPath, FILTER_VALIDATE_URL) && is_file($normalizedPath)) {
+                return $this->uploadToolkitLocalFile($target, $normalizedPath, $fileName, $altText, $caption, $description);
+            }
+
             return $this->wptoolkit->wpCliUploadMedia($target["server"], (int) $target["install_id"], $filePath, $fileName, $altText, $caption, $description);
         }
 
@@ -1024,10 +1029,8 @@ class WordPressManagerService
 
         return null;
     }
-    // ===== code-side unique methods (preserved during 3-way merge) =====
 
-    // === createToolkitPost ===
-private function createToolkitPost(array $target, array $payload): array
+    private function createToolkitPost(array $target, array $payload): array
     {
         $php = <<<'PHP'
 $payload = __PAYLOAD__ ;
@@ -1039,9 +1042,69 @@ $post = [
 ];
 if (array_key_exists("excerpt", $payload) && $payload["excerpt"] !== null) {
     $post["post_excerpt"] = (string) $payload["excerpt"];
+}
+if (!empty($payload["date"])) {
+    $post["post_date"] = (string) $payload["date"];
+}
+$author = $payload["author"] ?? null;
+if ($author !== null && $author !== "") {
+    if (is_numeric($author)) {
+        $post["post_author"] = (int) $author;
+    } else {
+        $user = get_user_by("login", (string) $author);
+        if ($user) {
+            $post["post_author"] = (int) $user->ID;
+        }
+    }
+}
+$postId = wp_insert_post($post, true);
+if (is_wp_error($postId)) {
+    echo "HEXA_TOOLKIT_CREATE:" . wp_json_encode(["success" => false, "message" => $postId->get_error_message()]);
+    return;
+}
+if (!empty($payload["categories"])) {
+    wp_set_post_terms($postId, array_values(array_filter(array_map("intval", (array) $payload["categories"]))), "category", false);
+}
+if (!empty($payload["tags"])) {
+    wp_set_post_terms($postId, array_values(array_filter(array_map("intval", (array) $payload["tags"]))), "post_tag", false);
+}
+foreach ((array) ($payload["taxonomies"] ?? []) as $taxonomy => $termIds) {
+    $taxonomy = (string) $taxonomy;
+    if (!taxonomy_exists($taxonomy)) {
+        continue;
+    }
+    $cleanIds = array_values(array_filter(array_map("intval", (array) $termIds)));
+    if ($cleanIds !== []) {
+        wp_set_post_terms($postId, $cleanIds, $taxonomy, false);
+    }
+}
+if (!empty($payload["featured_media"])) {
+    update_post_meta($postId, "_thumbnail_id", (int) $payload["featured_media"]);
+}
+echo "HEXA_TOOLKIT_CREATE:" . wp_json_encode([
+    "success" => true,
+    "data" => [
+        "post_id" => (int) $postId,
+        "post_url" => (string) (get_permalink($postId) ?: ""),
+        "post_status" => (string) get_post_status($postId),
+        "post_title" => (string) get_the_title($postId),
+        "post_date" => (string) get_post_field("post_date", $postId),
+    ],
+]);
+PHP;
+        $php = str_replace("__PAYLOAD__", var_export($payload, true), $php);
+        $result = $this->evaluatePhp($target, $php);
+        if (!($result["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($result["message"] ?? "WP Toolkit post create failed."), "data" => null];
+        }
+        $parsed = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_TOOLKIT_CREATE:");
+        if (!is_array($parsed) || !($parsed["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($parsed["message"] ?? "Failed to parse WP Toolkit post create output."), "data" => null];
+        }
+        return ["success" => true, "message" => "Post created via WP Toolkit.", "data" => is_array($parsed["data"] ?? null) ? $parsed["data"] : null];
+    }
 
-    // === isLocalWhmServerTarget ===
-private function isLocalWhmServerTarget(array $target): bool
+    private function isLocalWhmServerTarget(array $target): bool
     {
         $target = $this->normalizeTarget($target);
         return $this->usesWpToolkit($target)
@@ -1049,8 +1112,7 @@ private function isLocalWhmServerTarget(array $target): bool
             && $this->wptoolkit->isSameHostServer($target["server"]);
     }
 
-    // === normalizeUserRow ===
-private function normalizeUserRow(array $user): array
+    private function normalizeUserRow(array $user): array
     {
         return [
             "id" => (int) ($user["id"] ?? $user["ID"] ?? 0),
@@ -1062,8 +1124,7 @@ private function normalizeUserRow(array $user): array
         ];
     }
 
-    // === restPostEndpoint ===
-private function restPostEndpoint(string $postType, ?string $customEndpoint = null): string
+    private function restPostEndpoint(string $postType, ?string $customEndpoint = null): string
     {
         $customEndpoint = trim((string) $customEndpoint);
         if ($customEndpoint !== "") {
@@ -1078,8 +1139,7 @@ private function restPostEndpoint(string $postType, ?string $customEndpoint = nu
         return $postType;
     }
 
-    // === uploadToolkitLocalFile ===
-private function uploadToolkitLocalFile(array $target, string $filePath, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
+    private function uploadToolkitLocalFile(array $target, string $filePath, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
     {
         $target = $this->normalizeTarget($target);
         if (!$this->isLocalWhmServerTarget($target)) {
@@ -1100,8 +1160,7 @@ private function uploadToolkitLocalFile(array $target, string $filePath, string 
         );
     }
 
-    // === createUser ===
-public function createUser(array $target, array $payload): array
+    public function createUser(array $target, array $payload): array
     {
         $target = $this->normalizeTarget($target);
         $login = trim((string) ($payload["username"] ?? $payload["user_login"] ?? ""));
@@ -1153,8 +1212,7 @@ public function createUser(array $target, array $payload): array
         return ["success" => true, "message" => "User created via REST.", "user" => $this->normalizeUserRow((array) ($response["data"] ?? []))];
     }
 
-    // === deleteUser ===
-public function deleteUser(array $target, int $userId, ?int $reassignUserId = null): array
+    public function deleteUser(array $target, int $userId, ?int $reassignUserId = null): array
     {
         $target = $this->normalizeTarget($target);
         if ($userId <= 0) {
@@ -1181,8 +1239,7 @@ public function deleteUser(array $target, int $userId, ?int $reassignUserId = nu
         ];
     }
 
-    // === generateLoginUrl ===
-public function generateLoginUrl(array $target, string $wpUser): array
+    public function generateLoginUrl(array $target, string $wpUser): array
     {
         $target = $this->normalizeTarget($target);
         if (!$this->usesWpToolkit($target)) {
@@ -1201,8 +1258,7 @@ public function generateLoginUrl(array $target, string $wpUser): array
         );
     }
 
-    // === getCredentials ===
-public function getCredentials(array $target): array
+    public function getCredentials(array $target): array
     {
         $target = $this->normalizeTarget($target);
         if (!$this->usesWpToolkit($target)) {
@@ -1218,8 +1274,7 @@ public function getCredentials(array $target): array
         );
     }
 
-    // === getInstallInfo ===
-public function getInstallInfo(array $target): array
+    public function getInstallInfo(array $target): array
     {
         $target = $this->normalizeTarget($target);
         if (!$this->usesWpToolkit($target)) {
@@ -1281,8 +1336,7 @@ public function getInstallInfo(array $target): array
         return ["success" => true, "message" => "Install info loaded via WP Toolkit.", "install" => $install];
     }
 
-    // === getPostDetailsByIds ===
-public function getPostDetailsByIds(array $target, array $postIds): array
+    public function getPostDetailsByIds(array $target, array $postIds): array
     {
         $target = $this->normalizeTarget($target);
         $postIds = array_values(array_unique(array_filter(array_map("intval", $postIds))));
@@ -1299,9 +1353,83 @@ $post=get_post((int) $postId);
 if (!$post) {
     echo "HEXA_POST_DETAIL:null";
     return;
+}
+$author=get_userdata((int) $post->post_author);
+$featuredId=(int) get_post_thumbnail_id($postId);
+$meta=get_post_meta($postId);
+$flatMeta=[];
+foreach ((array) $meta as $key => $value) {
+    $flatMeta[(string) $key] = is_array($value) && count($value) === 1 ? $value[0] : $value;
+}
+$sizes=[];
+if ($featuredId > 0) {
+    foreach (["full", "large", "medium", "thumbnail"] as $size) {
+        $src = wp_get_attachment_image_url($featuredId, $size);
+        if ($src) {
+            $sizes[$size] = $src;
+        }
+    }
+}
+echo "HEXA_POST_DETAIL:" . wp_json_encode([
+    "id" => (int) $postId,
+    "post_id" => (int) $postId,
+    "post_title" => (string) get_the_title($postId),
+    "post_name" => (string) $post->post_name,
+    "post_status" => (string) $post->post_status,
+    "post_date" => (string) $post->post_date,
+    "post_modified" => (string) $post->post_modified,
+    "permalink" => (string) get_permalink($postId),
+    "edit_url" => (string) get_edit_post_link($postId, ""),
+    "author_id" => (int) $post->post_author,
+    "author_name" => (string) ($author->display_name ?? ""),
+    "featured_image_id" => $featuredId > 0 ? $featuredId : null,
+    "featured_image_url" => $featuredId > 0 ? (string) wp_get_attachment_url($featuredId) : null,
+    "image_sizes" => $sizes,
+    "meta" => $flatMeta,
+]);
+PHP;
+                $php = str_replace("__POST_ID__", (string) ((int) $postId), $php);
+                $result = $this->evaluatePhp($target, $php);
+                if (!($result["success"] ?? false)) {
+                    return ["success" => false, "message" => (string) ($result["message"] ?? "Post detail lookup failed."), "posts" => []];
+                }
+                $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_POST_DETAIL:");
+                if (is_array($payload) && !empty($payload["post_id"])) {
+                    $posts[(int) $payload["post_id"]] = $payload;
+                }
+            }
+            return ["success" => true, "message" => count($posts) . " post detail row(s) loaded via WP Toolkit.", "posts" => $posts];
+        }
 
-    // === getUserRole ===
-public function getUserRole(array $target, int $userId): array
+        $posts = [];
+        foreach ($postIds as $postId) {
+            $response = $this->restRequest($target, "get", "posts/" . $postId, [], ["context" => "edit"]);
+            if (!($response["success"] ?? false) || !is_array($response["data"] ?? null)) {
+                continue;
+            }
+            $data = (array) $response["data"];
+            $posts[$postId] = [
+                "id" => $postId,
+                "post_id" => $postId,
+                "post_title" => (string) (($data["title"]["rendered"] ?? $data["title"] ?? "") ?: ""),
+                "post_name" => (string) ($data["slug"] ?? ""),
+                "post_status" => (string) ($data["status"] ?? ""),
+                "post_date" => (string) ($data["date"] ?? ""),
+                "post_modified" => (string) ($data["modified"] ?? ""),
+                "permalink" => (string) ($data["link"] ?? ""),
+                "edit_url" => "",
+                "author_id" => (int) ($data["author"] ?? 0),
+                "author_name" => "",
+                "featured_image_id" => isset($data["featured_media"]) ? (int) $data["featured_media"] : null,
+                "featured_image_url" => "",
+                "image_sizes" => [],
+                "meta" => (array) ($data["meta"] ?? []),
+            ];
+        }
+        return ["success" => true, "message" => count($posts) . " post detail row(s) loaded via REST.", "posts" => $posts];
+    }
+
+    public function getUserRole(array $target, int $userId): array
     {
         $target = $this->normalizeTarget($target);
         if ($userId <= 0) {
@@ -1317,8 +1445,7 @@ public function getUserRole(array $target, int $userId): array
         return ["success" => true, "message" => "User role loaded.", "role" => $roles[0] ?? null, "roles" => $roles, "user" => $users["users"][0]];
     }
 
-    // === listUsers ===
-public function listUsers(array $target, array $filters = []): array
+    public function listUsers(array $target, array $filters = []): array
     {
         $target = $this->normalizeTarget($target);
         $filters = [
@@ -1375,8 +1502,7 @@ public function listUsers(array $target, array $filters = []): array
         return ["success" => true, "message" => count($users) . " user(s) loaded via REST.", "users" => $users];
     }
 
-    // === setUserRole ===
-public function setUserRole(array $target, int $userId, string $role): array
+    public function setUserRole(array $target, int $userId, string $role): array
     {
         $target = $this->normalizeTarget($target);
         $role = trim($role);
@@ -1397,8 +1523,7 @@ public function setUserRole(array $target, int $userId, string $role): array
         return $this->updateUser($target, $userId, ["role" => $role]);
     }
 
-    // === updatePostMeta ===
-public function updatePostMeta(array $target, int $postId, array $meta): array
+    public function updatePostMeta(array $target, int $postId, array $meta): array
     {
         $target = $this->normalizeTarget($target);
         $meta = array_filter($meta, static fn ($value, $key) => is_string($key) && trim($key) !== "", ARRAY_FILTER_USE_BOTH);
@@ -1426,8 +1551,7 @@ public function updatePostMeta(array $target, int $postId, array $meta): array
         ];
     }
 
-    // === updateUser ===
-public function updateUser(array $target, int $userId, array $payload): array
+    public function updateUser(array $target, int $userId, array $payload): array
     {
         $target = $this->normalizeTarget($target);
         if ($userId <= 0) {
@@ -1482,6 +1606,4 @@ public function updateUser(array $target, int $userId, array $payload): array
 
         return ["success" => true, "message" => "User updated via REST.", "user" => $this->normalizeUserRow((array) ($response["data"] ?? []))];
     }
-
-
 }
