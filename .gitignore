@@ -1,0 +1,6 @@
+
+# Runtime artifacts + edit backups (preserved on disk, not tracked)
+error_log
+*.bak
+*.bak-*
+*.bak_*
