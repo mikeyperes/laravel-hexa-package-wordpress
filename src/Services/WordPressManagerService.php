@@ -691,7 +691,7 @@ class WordPressManagerService
         $target = $this->normalizeTarget($target);
         if ($this->usesWpToolkit($target)) {
             $normalizedPath = trim($filePath);
-            if ($normalizedPath !== "" && !filter_var($normalizedPath, FILTER_VALIDATE_URL) && is_file($normalizedPath)) {
+            if ($normalizedPath !== "" && !filter_var($normalizedPath, FILTER_VALIDATE_URL) && is_file($normalizedPath) && $this->isLocalWhmServerTarget($target)) {
                 return $this->uploadToolkitLocalFile($target, $normalizedPath, $fileName, $altText, $caption, $description);
             }
 
@@ -1345,59 +1345,77 @@ PHP;
         }
 
         if ($this->usesWpToolkit($target)) {
-            $posts = [];
-            foreach ($postIds as $postId) {
-                $php = <<<'PHP'
-$postId=__POST_ID__;
-$post=get_post((int) $postId);
-if (!$post) {
-    echo "HEXA_POST_DETAIL:null";
-    return;
-}
-$author=get_userdata((int) $post->post_author);
-$featuredId=(int) get_post_thumbnail_id($postId);
-$meta=get_post_meta($postId);
-$flatMeta=[];
-foreach ((array) $meta as $key => $value) {
-    $flatMeta[(string) $key] = is_array($value) && count($value) === 1 ? $value[0] : $value;
-}
-$sizes=[];
-if ($featuredId > 0) {
-    foreach (["full", "large", "medium", "thumbnail"] as $size) {
-        $src = wp_get_attachment_image_url($featuredId, $size);
-        if ($src) {
-            $sizes[$size] = $src;
+            $php = <<<'PHP'
+$postIds = __POST_IDS__;
+$posts = [];
+$imageSizes = array_values(array_unique(array_merge(["full", "large", "medium", "medium_large", "thumbnail"], get_intermediate_image_sizes())));
+foreach ((array) $postIds as $rawPostId) {
+    $postId = (int) $rawPostId;
+    if ($postId <= 0) {
+        continue;
+    }
+    $post = get_post($postId);
+    if (!$post) {
+        continue;
+    }
+    $author = get_userdata((int) $post->post_author);
+    $featuredId = (int) get_post_thumbnail_id($postId);
+    $meta = get_post_meta($postId);
+    $flatMeta = [];
+    foreach ((array) $meta as $key => $value) {
+        $flatMeta[(string) $key] = is_array($value) && count($value) === 1 ? $value[0] : $value;
+    }
+    $sizes = [];
+    if ($featuredId > 0) {
+        foreach ($imageSizes as $size) {
+            $src = wp_get_attachment_image_src($featuredId, $size);
+            if (is_array($src) && !empty($src[0])) {
+                $sizes[(string) $size] = [
+                    "url" => (string) $src[0],
+                    "width" => (int) ($src[1] ?? 0),
+                    "height" => (int) ($src[2] ?? 0),
+                ];
+            }
         }
     }
+    $categories = wp_get_post_terms($postId, "category", ["fields" => "names"]);
+    if (is_wp_error($categories)) {
+        $categories = [];
+    }
+    $posts[$postId] = [
+        "id" => $postId,
+        "post_id" => $postId,
+        "post_title" => (string) get_the_title($postId),
+        "post_name" => (string) $post->post_name,
+        "post_status" => (string) $post->post_status,
+        "post_date" => (string) $post->post_date,
+        "post_modified" => (string) $post->post_modified,
+        "permalink" => (string) get_permalink($postId),
+        "edit_url" => (string) get_edit_post_link($postId, ""),
+        "author_id" => (int) $post->post_author,
+        "author_name" => (string) ($author->display_name ?? ""),
+        "featured_image_id" => $featuredId > 0 ? $featuredId : null,
+        "featured_image_url" => $featuredId > 0 ? (string) wp_get_attachment_url($featuredId) : null,
+        "image_sizes" => $sizes,
+        "categories" => array_values(array_filter(array_map("strval", (array) $categories))),
+        "meta" => $flatMeta,
+    ];
 }
-echo "HEXA_POST_DETAIL:" . wp_json_encode([
-    "id" => (int) $postId,
-    "post_id" => (int) $postId,
-    "post_title" => (string) get_the_title($postId),
-    "post_name" => (string) $post->post_name,
-    "post_status" => (string) $post->post_status,
-    "post_date" => (string) $post->post_date,
-    "post_modified" => (string) $post->post_modified,
-    "permalink" => (string) get_permalink($postId),
-    "edit_url" => (string) get_edit_post_link($postId, ""),
-    "author_id" => (int) $post->post_author,
-    "author_name" => (string) ($author->display_name ?? ""),
-    "featured_image_id" => $featuredId > 0 ? $featuredId : null,
-    "featured_image_url" => $featuredId > 0 ? (string) wp_get_attachment_url($featuredId) : null,
-    "image_sizes" => $sizes,
-    "meta" => $flatMeta,
+echo "HEXA_POST_DETAILS:" . wp_json_encode([
+    "success" => true,
+    "posts" => $posts,
 ]);
 PHP;
-                $php = str_replace("__POST_ID__", (string) ((int) $postId), $php);
-                $result = $this->evaluatePhp($target, $php);
-                if (!($result["success"] ?? false)) {
-                    return ["success" => false, "message" => (string) ($result["message"] ?? "Post detail lookup failed."), "posts" => []];
-                }
-                $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_POST_DETAIL:");
-                if (is_array($payload) && !empty($payload["post_id"])) {
-                    $posts[(int) $payload["post_id"]] = $payload;
-                }
+            $php = str_replace("__POST_IDS__", var_export($postIds, true), $php);
+            $result = $this->evaluatePhp($target, $php);
+            if (!($result["success"] ?? false)) {
+                return ["success" => false, "message" => (string) ($result["message"] ?? "Post detail lookup failed."), "posts" => []];
             }
+            $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_POST_DETAILS:");
+            if (!is_array($payload) || !($payload["success"] ?? false)) {
+                return ["success" => false, "message" => "Failed to parse WP Toolkit post detail output.", "posts" => []];
+            }
+            $posts = is_array($payload["posts"] ?? null) ? $payload["posts"] : [];
             return ["success" => true, "message" => count($posts) . " post detail row(s) loaded via WP Toolkit.", "posts" => $posts];
         }
 
@@ -1532,15 +1550,14 @@ PHP;
         }
 
         if ($this->usesWpToolkit($target)) {
-            foreach ($meta as $key => $value) {
-                $php = "update_post_meta(" . $postId . ", " . var_export((string) $key, true) . ", " . var_export($value, true) . "); echo \"HEXA_POST_META_OK\";";
-                $result = $this->evaluatePhp($target, $php);
-                $stdout = trim((string) ($result["stdout"] ?? ""));
-                if (!($result["success"] ?? false) || !str_contains($stdout, "HEXA_POST_META_OK")) {
-                    return ["success" => false, "message" => trim($stdout) !== "" ? trim($stdout) : ((string) ($result["message"] ?? "Post meta update failed."))];
-                }
+            $php = '$meta = ' . var_export($meta, true) . '; foreach ($meta as $key => $value) { update_post_meta(' . $postId . ', (string) $key, $value); } echo "HEXA_POST_META_OK";';
+            $result = $this->evaluatePhp($target, $php);
+            $stdout = trim((string) ($result["stdout"] ?? ""));
+            if (!($result["success"] ?? false) || !str_contains($stdout, "HEXA_POST_META_OK")) {
+                return ["success" => false, "message" => trim($stdout) !== "" ? trim($stdout) : ((string) ($result["message"] ?? "Post meta update failed."))];
             }
-            return ["success" => true, "message" => count($meta) . " post meta field(s) updated via WP Toolkit."];
+
+            return ["success" => true, "message" => count($meta) . " post meta field(s) updated via one WP Toolkit batch."];
         }
 
         $response = $this->restRequest($target, "post", "posts/" . $postId, ["meta" => $meta]);
