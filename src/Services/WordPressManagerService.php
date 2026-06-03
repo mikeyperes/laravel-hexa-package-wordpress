@@ -1065,7 +1065,7 @@ class WordPressManagerService
         $target = $this->normalizeTarget($target);
         if ($this->usesWpToolkit($target)) {
             $normalizedPath = trim($filePath);
-            if ($normalizedPath !== "" && !filter_var($normalizedPath, FILTER_VALIDATE_URL) && is_file($normalizedPath) && $this->isLocalWhmServerTarget($target)) {
+            if ($normalizedPath !== "" && !filter_var($normalizedPath, FILTER_VALIDATE_URL) && is_file($normalizedPath)) {
                 return $this->uploadToolkitLocalFile($target, $normalizedPath, $fileName, $altText, $caption, $description);
             }
 
@@ -1645,9 +1645,6 @@ PHP;
     private function uploadToolkitLocalFile(array $target, string $filePath, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
     {
         $target = $this->normalizeTarget($target);
-        if (!$this->isLocalWhmServerTarget($target)) {
-            return ["success" => false, "message" => "Toolkit local file uploads require a same-server WordPress target."];
-        }
         if (!is_file($filePath) || !is_readable($filePath)) {
             return ["success" => false, "message" => "Local media file does not exist or is not readable."];
         }
