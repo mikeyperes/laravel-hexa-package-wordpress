@@ -698,14 +698,37 @@ class WordPressManagerService
     {
         $target = $this->normalizeTarget($target);
         $mimeType = trim((string) ($query["mime_type"] ?? "image"));
-        $perPage = max(1, min(500, (int) ($query["per_page"] ?? 100)));
+        $perPage = max(1, min(100, (int) ($query["per_page"] ?? 60)));
+        $page = max(1, (int) ($query["page"] ?? 1));
+        $search = trim((string) ($query["search"] ?? ""));
 
         if ($this->usesWpToolkit($target)) {
+            if (method_exists($this->wptoolkit, "wpCliMediaSelector")) {
+                $selector = $this->wptoolkit->wpCliMediaSelector($target["server"], (int) $target["install_id"], [
+                    "mime_type" => $mimeType,
+                    "per_page" => $perPage,
+                    "page" => $page,
+                    "search" => $search,
+                    "include_ids" => (array) ($query["include_ids"] ?? []),
+                ]);
+                $items = array_values(array_filter((array) ($selector["items"] ?? []), "is_array"));
+                return array_replace($selector, [
+                    "success" => (bool) ($selector["success"] ?? false),
+                    "message" => (string) ($selector["message"] ?? (count($items) . " media item(s) loaded via WP Toolkit selector.")),
+                    "items" => $items,
+                    "data" => $items,
+                    "source" => "wptoolkit.media_selector",
+                ]);
+            }
+
             $parts = [
                 '$mimeType=' . var_export($mimeType, true) . ';',
                 '$perPage=' . $perPage . ';',
-                '$args=["post_type"=>"attachment","post_status"=>"inherit","posts_per_page"=>$perPage,"orderby"=>"date","order"=>"DESC"];',
+                '$page=' . $page . ';',
+                '$search=' . var_export($search, true) . ';',
+                '$args=["post_type"=>"attachment","post_status"=>"inherit","posts_per_page"=>$perPage,"paged"=>$page,"orderby"=>"date","order"=>"DESC"];',
                 'if ($mimeType !== "") { $args["post_mime_type"]=$mimeType; }',
+                'if ($search !== "") { $args["s"]=$search; }',
                 '$q=new WP_Query($args);',
                 '$items=[];',
                 'foreach ($q->posts as $post) {',
@@ -726,10 +749,16 @@ class WordPressManagerService
                 return ["success" => false, "message" => "Failed to parse WordPress media list output.", "items" => []];
             }
             $items = array_values(array_filter((array) ($payload["items"] ?? []), "is_array"));
-            return ["success" => true, "message" => (string) ($payload["message"] ?? (count($items) . " media item(s) loaded.")), "items" => $items];
+            return ["success" => true, "message" => (string) ($payload["message"] ?? (count($items) . " media item(s) loaded.")), "items" => $items, "data" => $items];
         }
 
-        $response = $this->restRequest($target, "get", "media", [], ["per_page" => $perPage]);
+        $restQuery = ["per_page" => $perPage, "page" => $page];
+        if ($search !== "") $restQuery["search"] = $search;
+        if ($mimeType !== "") {
+            if (str_contains($mimeType, "/")) $restQuery["mime_type"] = $mimeType;
+            else $restQuery["media_type"] = $mimeType;
+        }
+        $response = $this->restRequest($target, "get", "media", [], $restQuery);
         $items = array_values(array_filter((array) ($response["data"] ?? []), "is_array"));
         $items = array_map(static function (array $item): array {
             $sizes = is_array($item["media_details"]["sizes"] ?? null) ? $item["media_details"]["sizes"] : [];
@@ -743,7 +772,7 @@ class WordPressManagerService
                 "medium_url" => $medium,
             ]);
         }, $items);
-        return ["success" => (bool) ($response["success"] ?? false), "message" => ($response["success"] ?? false) ? "Media loaded via REST." : (string) ($response["message"] ?? "Media list failed."), "items" => $items];
+        return ["success" => (bool) ($response["success"] ?? false), "message" => ($response["success"] ?? false) ? "Media loaded via REST." : (string) ($response["message"] ?? "Media list failed."), "items" => $items, "data" => $items];
     }
 
 
@@ -975,17 +1004,41 @@ class WordPressManagerService
         $fg = imagecolorallocate($image, $foreground[0], $foreground[1], $foreground[2]);
         imagefilledrectangle($image, 0, 0, $size, $size, $bg ?: 0);
 
-        $font = $this->firstExistingPath(["/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]);
+        $font = $this->firstExistingPath([
+            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSansMono-Bold.ttf",
+            "/usr/share/fonts/google-droid/DroidSans-Bold.ttf",
+            "/usr/share/fonts/liberation-mono/LiberationMono-Bold.ttf",
+            "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/google-noto/NotoSans-Bold.ttf",
+        ]);
         if ($font !== "" && function_exists("imagettfbbox") && function_exists("imagettftext")) {
-            $fontSize = 310;
+            $fontSize = (int) round($size * 0.74);
             $box = imagettfbbox($fontSize, 0, $font, $letter);
-            $textWidth = abs((int) $box[2] - (int) $box[0]);
-            $textHeight = abs((int) $box[7] - (int) $box[1]);
-            $x = (int) (($size - $textWidth) / 2 - (int) $box[0]);
-            $y = (int) (($size + $textHeight) / 2 - 16);
+            $xs = [(int) $box[0], (int) $box[2], (int) $box[4], (int) $box[6]];
+            $ys = [(int) $box[1], (int) $box[3], (int) $box[5], (int) $box[7]];
+            $minX = min($xs);
+            $maxX = max($xs);
+            $minY = min($ys);
+            $maxY = max($ys);
+            $textWidth = $maxX - $minX;
+            $textHeight = $maxY - $minY;
+            $x = (int) (($size - $textWidth) / 2 - $minX);
+            $y = (int) (($size - $textHeight) / 2 - $minY);
             imagettftext($image, $fontSize, 0, $x, $y, $fg ?: 0, $font, $letter);
         } else {
-            imagestring($image, 5, 232, 232, $letter, $fg ?: 0);
+            $smallSize = 18;
+            $small = imagecreatetruecolor($smallSize, $smallSize);
+            imagefilledrectangle($small, 0, 0, $smallSize, $smallSize, $bg ?: 0);
+            $fontId = 5;
+            $tw = imagefontwidth($fontId) * strlen($letter);
+            $th = imagefontheight($fontId);
+            imagestring($small, $fontId, (int) (($smallSize - $tw) / 2), (int) (($smallSize - $th) / 2), $letter, $fg ?: 0);
+            $scaled = 390;
+            imagecopyresampled($image, $small, (int) (($size - $scaled) / 2), (int) (($size - $scaled) / 2), 0, 0, $scaled, $scaled, $smallSize, $smallSize);
+            imagedestroy($small);
         }
 
         $tmp = tempnam(sys_get_temp_dir(), "sfpf-favicon-");
