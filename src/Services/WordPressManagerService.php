@@ -980,6 +980,26 @@ class WordPressManagerService
         return $payload;
     }
 
+    public function purgeSiteCache(array $target): array
+    {
+        $target = $this->normalizeTarget($target);
+        $parts = [
+            '$actions=[];',
+            'if (function_exists("wp_cache_flush")) { wp_cache_flush(); $actions[]="wp_cache_flush"; }',
+            '$front=(int) get_option("page_on_front"); if ($front>0 && function_exists("clean_post_cache")) { clean_post_cache($front); $actions[]="front_page_post_cache"; }',
+            'if (function_exists("clean_post_cache")) { clean_post_cache((int) get_option("site_icon")); $actions[]="site_icon_post_cache"; }',
+            'if (function_exists("delete_transient")) { delete_transient("site_icon_url"); delete_transient("_site_icon_url"); $actions[]="site_icon_transients"; }',
+            '$actions=array_values(array_unique($actions));',
+            'echo "HEXA_SITE_CACHE_PURGE:" . wp_json_encode(["success"=>true,"message"=>count($actions)." bounded WordPress cache purge action(s) requested.","actions"=>$actions]);',
+        ];
+        $result = $this->evaluatePhp($target, implode("", $parts));
+        if (!($result["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($result["message"] ?? "WordPress cache purge failed."), "actions" => []];
+        }
+        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_SITE_CACHE_PURGE:");
+        return is_array($payload) ? $payload : ["success" => false, "message" => "Failed to parse WordPress cache purge output.", "actions" => []];
+    }
+
     public function createLetterSiteIcon(array $target, string $letter, array $options = []): array
     {
         $target = $this->normalizeTarget($target);
