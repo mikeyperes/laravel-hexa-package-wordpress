@@ -985,19 +985,71 @@ class WordPressManagerService
         $target = $this->normalizeTarget($target);
         $parts = [
             '$actions=[];',
+            '$warnings=[];',
             'if (function_exists("wp_cache_flush")) { wp_cache_flush(); $actions[]="wp_cache_flush"; }',
             '$front=(int) get_option("page_on_front"); if ($front>0 && function_exists("clean_post_cache")) { clean_post_cache($front); $actions[]="front_page_post_cache"; }',
             'if (function_exists("clean_post_cache")) { clean_post_cache((int) get_option("site_icon")); $actions[]="site_icon_post_cache"; }',
             'if (function_exists("delete_transient")) { delete_transient("site_icon_url"); delete_transient("_site_icon_url"); $actions[]="site_icon_transients"; }',
+            '$active=(array) get_option("active_plugins", []);',
+            '$litespeed=in_array("litespeed-cache/litespeed-cache.php", $active, true) || defined("LSCWP_V");',
+            'if ($litespeed && has_action("litespeed_purge_all")) { ob_start(); do_action("litespeed_purge_all"); ob_end_clean(); $actions[]="litespeed_purge_all"; }',
+            'elseif ($litespeed) { $warnings[]="LiteSpeed was detected, but the purge hook is unavailable in the WP Toolkit wrapper context."; }',
             '$actions=array_values(array_unique($actions));',
-            'echo "HEXA_SITE_CACHE_PURGE:" . wp_json_encode(["success"=>true,"message"=>count($actions)." bounded WordPress cache purge action(s) requested.","actions"=>$actions]);',
+            '$message=count($actions)." WordPress cache purge action(s) requested.";',
+            'if (!empty($warnings)) { $message.=" Warning: ".implode(" ", array_values(array_unique($warnings))); }',
+            'echo "HEXA_SITE_CACHE_PURGE:" . wp_json_encode(["success"=>true,"message"=>$message,"actions"=>$actions,"warnings"=>array_values(array_unique($warnings)),"litespeed_detected"=>$litespeed]);',
         ];
         $result = $this->evaluatePhp($target, implode("", $parts));
         if (!($result["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($result["message"] ?? "WordPress cache purge failed."), "actions" => []];
+            return ["success" => false, "message" => (string) ($result["message"] ?? "WordPress cache purge failed."), "actions" => [], "warnings" => []];
         }
         $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_SITE_CACHE_PURGE:");
-        return is_array($payload) ? $payload : ["success" => false, "message" => "Failed to parse WordPress cache purge output.", "actions" => []];
+        if (!is_array($payload)) {
+            return ["success" => false, "message" => "Failed to parse WordPress cache purge output.", "actions" => [], "warnings" => []];
+        }
+
+        $actions = array_values(array_unique((array) ($payload["actions"] ?? [])));
+        $warnings = array_values(array_filter((array) ($payload["warnings"] ?? [])));
+        $needsDirectLiteSpeed = ($payload["litespeed_detected"] ?? false)
+            && !in_array("litespeed_purge_all", $actions, true)
+            && $this->usesWpToolkit($target)
+            && method_exists($this->wptoolkit, "wpCliEvalWithPlugins");
+
+        if ($needsDirectLiteSpeed) {
+            $directPhp = '$actions=[];$warnings=[];'
+                . 'if (has_action("litespeed_purge_all")) { ob_start(); do_action("litespeed_purge_all"); ob_end_clean(); $actions[]="litespeed_purge_all"; }'
+                . 'elseif (defined("LSCWP_V")) { $warnings[]="LiteSpeed is loaded, but the purge hook is unavailable."; }'
+                . 'else { $warnings[]="LiteSpeed is not loaded in the direct wp-cli context."; }'
+                . 'echo "HEXA_LITESPEED_PURGE:" . wp_json_encode(["success"=>empty($warnings),"actions"=>$actions,"warnings"=>$warnings]);';
+            $direct = $this->wptoolkit->wpCliEvalWithPlugins($target["server"], (int) $target["install_id"], $directPhp, 45);
+            if (($direct["success"] ?? false)) {
+                $directPayload = $this->decodeMarkedPayload((string) ($direct["stdout"] ?? ""), "HEXA_LITESPEED_PURGE:");
+                if (is_array($directPayload)) {
+                    foreach ((array) ($directPayload["actions"] ?? []) as $action) {
+                        $actions[] = (string) $action;
+                    }
+                    foreach ((array) ($directPayload["warnings"] ?? []) as $warning) {
+                        $warnings[] = (string) $warning;
+                    }
+                    if (in_array("litespeed_purge_all", $actions, true)) {
+                        $warnings = array_values(array_filter($warnings, fn ($warning) => !str_contains($warning, "purge hook is unavailable")));
+                    }
+                }
+            } else {
+                $warnings[] = (string) ($direct["message"] ?? "Direct LiteSpeed purge failed.");
+            }
+        }
+
+        $actions = array_values(array_unique($actions));
+        $warnings = array_values(array_unique(array_filter($warnings)));
+        $payload["actions"] = $actions;
+        $payload["warnings"] = $warnings;
+        $payload["message"] = count($actions) . " WordPress cache purge action(s) requested.";
+        if (!empty($warnings)) {
+            $payload["message"] .= " Warning: " . implode(" ", $warnings);
+        }
+
+        return $payload;
     }
 
     public function createLetterSiteIcon(array $target, string $letter, array $options = []): array
