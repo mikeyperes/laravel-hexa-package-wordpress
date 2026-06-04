@@ -955,16 +955,27 @@ class WordPressManagerService
             'if (function_exists("get_site_icon_url")) { $url=(string) get_site_icon_url(512); }',
             'if ($url==="" && $id>0 && function_exists("wp_get_attachment_image_url")) { $u=wp_get_attachment_image_url($id,"full"); if ($u) { $url=(string) $u; } }',
             '$mediaId=$id; if ($mediaId<=0 && $url!=="" && function_exists("attachment_url_to_postid")) { $mediaId=(int) attachment_url_to_postid($url); }',
-            'echo "HEXA_SITE_ICON:" . wp_json_encode(["success"=>true,"site_icon_id"=>$id,"site_icon_url"=>$url,"media_id"=>$mediaId,"source"=>($url!=="" ? "wordpress_site_icon" : "none")]);',
+            '$favicon_path=rtrim(ABSPATH,"/")."/favicon.ico";',
+            '$favicon_url=home_url("/favicon.ico");',
+            '$favicon_exists=@is_file($favicon_path);',
+            '$favicon_size=$favicon_exists ? (int) @filesize($favicon_path) : 0;',
+            '$head=$favicon_exists ? (string) @file_get_contents($favicon_path,false,null,0,4) : "";',
+            '$favicon_valid=($head === "\\x00\\x00\\x01\\x00");',
+            'echo "HEXA_SITE_ICON:" . wp_json_encode(["success"=>true,"site_icon_id"=>$id,"site_icon_url"=>$url,"media_id"=>$mediaId,"source"=>($url!=="" ? "wordpress_site_icon" : "none"),"wordpress_site_icon_valid"=>($id>0 && $url!==""),"favicon_ico_url"=>$favicon_url,"favicon_ico_path"=>$favicon_path,"favicon_ico_exists"=>$favicon_exists,"favicon_ico_valid"=>$favicon_valid,"favicon_ico_size"=>$favicon_size]);',
         ];
         $result = $this->evaluatePhp($target, implode("", $parts));
         if (!($result["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($result["message"] ?? "Site icon lookup failed."), "site_icon_id" => 0, "site_icon_url" => "", "media_id" => 0, "source" => "none"];
+            return ["success" => false, "message" => (string) ($result["message"] ?? "Site icon lookup failed."), "site_icon_id" => 0, "site_icon_url" => "", "media_id" => 0, "source" => "none", "wordpress_site_icon_valid" => false, "favicon_ico_url" => rtrim((string) ($target["url"] ?? ""), "/") . "/favicon.ico", "favicon_ico_exists" => false, "favicon_ico_valid" => false, "favicon_ico_size" => 0];
         }
         $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_SITE_ICON:");
         if (!is_array($payload)) {
-            return ["success" => false, "message" => "Failed to parse site icon output.", "site_icon_id" => 0, "site_icon_url" => "", "media_id" => 0, "source" => "none"];
+            return ["success" => false, "message" => "Failed to parse site icon output.", "site_icon_id" => 0, "site_icon_url" => "", "media_id" => 0, "source" => "none", "wordpress_site_icon_valid" => false, "favicon_ico_url" => rtrim((string) ($target["url"] ?? ""), "/") . "/favicon.ico", "favicon_ico_exists" => false, "favicon_ico_valid" => false, "favicon_ico_size" => 0];
         }
+        $payload["wordpress_site_icon_valid"] = (bool) ($payload["wordpress_site_icon_valid"] ?? ((int) ($payload["site_icon_id"] ?? 0) > 0 && (string) ($payload["site_icon_url"] ?? "") !== ""));
+        $payload["favicon_ico_url"] = (string) ($payload["favicon_ico_url"] ?? (rtrim((string) ($target["url"] ?? ""), "/") . "/favicon.ico"));
+        $payload["favicon_ico_exists"] = (bool) ($payload["favicon_ico_exists"] ?? false);
+        $payload["favicon_ico_valid"] = (bool) ($payload["favicon_ico_valid"] ?? false);
+        $payload["favicon_ico_size"] = (int) ($payload["favicon_ico_size"] ?? 0);
         if ((string) ($payload["site_icon_url"] ?? "") === "") {
             $fallback = $this->discoverSiteIconFallback((string) ($target["url"] ?? ""));
             if ((string) ($fallback["url"] ?? "") !== "") {
@@ -1155,8 +1166,14 @@ class WordPressManagerService
             '$att=get_post($id);',
             'if (!$att || $att->post_type!=="attachment") { echo "HEXA_SITE_ICON_SET:" . wp_json_encode(["success"=>false,"message"=>"Attachment #".$id." was not found."]); return; }',
             'update_option("site_icon", $id);',
+            'if (function_exists("delete_transient")) { delete_transient("site_icon_url"); delete_transient("_site_icon_url"); }',
             '$url=function_exists("get_site_icon_url") ? (string) get_site_icon_url(512) : (string) wp_get_attachment_image_url($id,"full");',
-            'echo "HEXA_SITE_ICON_SET:" . wp_json_encode(["success"=>true,"message"=>"Site icon updated.","site_icon_id"=>$id,"site_icon_url"=>$url,"media_id"=>$id]);',
+            '$favicon_path=rtrim(ABSPATH,"/")."/favicon.ico"; $favicon_url=home_url("/favicon.ico"); $favicon_ico=false; $favicon_valid=false; $favicon_size=0; $favicon_message=""; $favicon_src=get_attached_file($id);',
+            '$make_png=function($source,$size){ $sw=(int) imagesx($source); $sh=(int) imagesy($source); if ($sw<=0 || $sh<=0) { return ""; } $canvas=imagecreatetruecolor($size,$size); if (!$canvas) { return ""; } imagealphablending($canvas,false); imagesavealpha($canvas,true); $clear=imagecolorallocatealpha($canvas,0,0,0,127); imagefilledrectangle($canvas,0,0,$size,$size,$clear); $scale=min($size/$sw,$size/$sh); $dw=max(1,(int) round($sw*$scale)); $dh=max(1,(int) round($sh*$scale)); $dx=(int) floor(($size-$dw)/2); $dy=(int) floor(($size-$dh)/2); imagecopyresampled($canvas,$source,$dx,$dy,0,0,$dw,$dh,$sw,$sh); ob_start(); imagepng($canvas); $png=(string) ob_get_clean(); imagedestroy($canvas); return $png; };',
+            '$make_ico=function($source) use ($make_png){ $images=[]; foreach ([256,32] as $size) { $data=$make_png($source,$size); if ($data!=="") { $images[]=[$size,$size,$data]; } } if (empty($images)) { return ""; } $offset=6+(count($images)*16); $dir=""; $body=""; foreach ($images as $img) { $w=(int) $img[0]; $h=(int) $img[1]; $data=(string) $img[2]; $dir.=pack("CCCCvvVV",$w>=256?0:$w,$h>=256?0:$h,0,0,1,32,strlen($data),$offset); $body.=$data; $offset+=strlen($data); } return pack("vvv",0,1,count($images)).$dir.$body; };',
+            'if (!$favicon_src || !@is_file($favicon_src)) { $favicon_message="Attachment file is unavailable, so root favicon.ico was not written."; } elseif (!function_exists("imagecreatefromstring") || !function_exists("imagecreatetruecolor") || !function_exists("imagepng")) { $favicon_message="PHP GD is unavailable, so root favicon.ico was not written."; } else { $bytes=@file_get_contents($favicon_src); $img=$bytes!==false ? @imagecreatefromstring($bytes) : false; if (!$img) { $favicon_message="Attachment image could not be decoded for favicon.ico."; } else { $ico=$make_ico($img); imagedestroy($img); if ($ico==="") { $favicon_message="Could not generate ICO bytes from the attachment."; } else { $written=@file_put_contents($favicon_path,$ico); if ($written===false) { $favicon_message="Could not write root favicon.ico."; } else { @chmod($favicon_path,0644); $favicon_ico=true; $favicon_size=(int) @filesize($favicon_path); $head=(string) @file_get_contents($favicon_path,false,null,0,4); $favicon_valid=($head === "\\x00\\x00\\x01\\x00"); if (!$favicon_valid) { $favicon_message="Root favicon.ico was written but failed ICO header validation."; } } } } }',
+            '$message=$favicon_ico && $favicon_valid ? "Site icon updated and root favicon.ico written as a valid ICO." : "Site icon updated."; if ($favicon_message!=="") { $message.=" ".$favicon_message; }',
+            'echo "HEXA_SITE_ICON_SET:" . wp_json_encode(["success"=>true,"message"=>$message,"site_icon_id"=>$id,"site_icon_url"=>$url,"media_id"=>$id,"source"=>"wordpress_site_icon","wordpress_site_icon_valid"=>($id>0 && $url!==""),"favicon_ico"=>$favicon_ico,"favicon_ico_url"=>$favicon_url,"favicon_ico_path"=>$favicon_path,"favicon_ico_exists"=>@is_file($favicon_path),"favicon_ico_valid"=>$favicon_valid,"favicon_ico_size"=>$favicon_size,"favicon_message"=>$favicon_message]);',
         ];
         $result = $this->evaluatePhp($target, implode("", $parts));
         if (!($result["success"] ?? false)) {
@@ -1173,9 +1190,11 @@ class WordPressManagerService
             '$prev=(int) get_option("site_icon");',
             '$deleteMedia=' . ($deleteMedia ? "true" : "false") . ';',
             'delete_option("site_icon");',
+            'if (function_exists("delete_transient")) { delete_transient("site_icon_url"); delete_transient("_site_icon_url"); }',
             '$deleted=false;',
             'if ($deleteMedia && $prev>0) { $att=get_post($prev); if ($att && $att->post_type==="attachment") { $deleted=(bool) wp_delete_attachment($prev, true); } }',
-            'echo "HEXA_SITE_ICON_CLEAR:" . wp_json_encode(["success"=>true,"message"=>"Site icon cleared.","previous_media_id"=>$prev,"deleted_previous_media"=>$deleted,"site_icon_id"=>0,"site_icon_url"=>"","media_id"=>0]);',
+            '$favicon_path=rtrim(ABSPATH,"/")."/favicon.ico"; $favicon_url=home_url("/favicon.ico"); $favicon_removed=false; if (@file_exists($favicon_path)) { $favicon_removed=(bool) @unlink($favicon_path); }',
+            'echo "HEXA_SITE_ICON_CLEAR:" . wp_json_encode(["success"=>true,"message"=>$favicon_removed ? "Site icon cleared and root favicon.ico removed." : "Site icon cleared.","previous_media_id"=>$prev,"deleted_previous_media"=>$deleted,"site_icon_id"=>0,"site_icon_url"=>"","media_id"=>0,"source"=>"none","wordpress_site_icon_valid"=>false,"favicon_removed"=>$favicon_removed,"favicon_ico_url"=>$favicon_url,"favicon_ico_path"=>$favicon_path,"favicon_ico_exists"=>@is_file($favicon_path),"favicon_ico_valid"=>false,"favicon_ico_size"=>0]);',
         ];
         $result = $this->evaluatePhp($target, implode("", $parts));
         if (!($result["success"] ?? false)) {
