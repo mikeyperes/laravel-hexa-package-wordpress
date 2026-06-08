@@ -4,6 +4,7 @@ namespace hexa_package_wordpress\Services;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Services\WpToolkitService;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -38,6 +39,8 @@ class WordPressManagerService
             "application_password" => (string) ($target["application_password"] ?? $target["wp_application_password"] ?? $target["app_password"] ?? ""),
             "server" => $server instanceof WhmServer ? $server : null,
             "install_id" => $installId > 0 ? $installId : null,
+            "cpanel_user" => (string) ($target["cpanel_user"] ?? $target["cpanel_username"] ?? ""),
+            "wp_path" => trim((string) ($target["wp_path"] ?? $target["wordpress_path"] ?? "public_html"), "/"),
             "default_author" => (string) ($target["default_author"] ?? ""),
             "site_id" => isset($target["site_id"]) ? (int) $target["site_id"] : null,
         ];
@@ -100,6 +103,81 @@ class WordPressManagerService
             "mode" => "rest",
             "label" => "REST API",
         ];
+    }
+
+    private function toolkitCacheBase(array $target, string $bucket): string
+    {
+        $target = $this->normalizeTarget($target);
+        $server = $target["server"] instanceof WhmServer ? $target["server"] : null;
+        $serverKey = $server ? ((string) ($server->id ?: $server->hostname)) : "rest";
+        $installKey = (string) ($target["install_id"] ?: "0");
+
+        return "wordpress-manager:" . $bucket . ":server:" . $serverKey . ":install:" . $installKey;
+    }
+
+    private function toolkitCacheVersion(array $target, string $bucket): string
+    {
+        return (string) Cache::get($this->toolkitCacheBase($target, $bucket) . ":version", "1");
+    }
+
+    private function toolkitCacheKey(array $target, string $bucket, string $suffix = ""): string
+    {
+        return $this->toolkitCacheBase($target, $bucket) . ":v" . $this->toolkitCacheVersion($target, $bucket) . ($suffix !== "" ? (":" . $suffix) : "");
+    }
+
+    private function bumpToolkitCacheVersion(array $target, string $bucket): void
+    {
+        Cache::forever($this->toolkitCacheBase($target, $bucket) . ":version", (string) microtime(true));
+    }
+
+    private function filterUserRows(array $users, array $filters): array
+    {
+        $rows = array_values(array_filter($users, "is_array"));
+        if ($filters["include"] !== []) {
+            $include = array_flip(array_map("intval", $filters["include"]));
+            $rows = array_values(array_filter($rows, static fn (array $user): bool => isset($include[(int) ($user["id"] ?? $user["ID"] ?? 0)])));
+        }
+        if ($filters["role"] !== "") {
+            $role = strtolower($filters["role"]);
+            $rows = array_values(array_filter($rows, static function (array $user) use ($role): bool {
+                $roles = array_map(static fn ($item): string => strtolower((string) $item), (array) ($user["roles"] ?? []));
+                return in_array($role, $roles, true);
+            }));
+        }
+        if ($filters["search"] !== "") {
+            $needle = strtolower($filters["search"]);
+            $rows = array_values(array_filter($rows, static function (array $user) use ($needle): bool {
+                $haystack = strtolower(trim(implode(" ", [
+                    (string) ($user["user_login"] ?? ""),
+                    (string) ($user["user_email"] ?? ""),
+                    (string) ($user["display_name"] ?? ""),
+                ])));
+                return $needle === "" || str_contains($haystack, $needle);
+            }));
+        }
+
+        return array_slice($rows, 0, $filters["per_page"]);
+    }
+
+    private function findExistingUser(array $target, string $login, string $email = "", bool $forceRefresh = false): array|null
+    {
+        $needles = array_values(array_unique(array_filter([strtolower(trim($login)), strtolower(trim($email))])));
+        if ($needles === []) {
+            return null;
+        }
+
+        foreach ($needles as $needle) {
+            $result = $this->listUsers($target, ["search" => $needle, "per_page" => 200, "force_refresh" => $forceRefresh]);
+            foreach ((array) ($result["users"] ?? []) as $user) {
+                $userLogin = strtolower(trim((string) ($user["user_login"] ?? "")));
+                $userEmail = strtolower(trim((string) ($user["user_email"] ?? "")));
+                if (($login !== "" && $userLogin === strtolower($login)) || ($email !== "" && $userEmail === strtolower($email))) {
+                    return $this->normalizeUserRow((array) $user);
+                }
+            }
+        }
+
+        return null;
     }
 
     public function discoverInstallsForAccount(WhmServer $server, string $cpanelUsername): array
@@ -189,6 +267,34 @@ class WordPressManagerService
             'message' => $message,
             'plugin' => $payload,
         ];
+    }
+
+
+    public function syncPluginFromGitHub(array $target, array $plugin): array
+    {
+        $target = $this->normalizeTarget($target);
+        if (!$this->usesWpToolkit($target)) {
+            return ['success' => false, 'message' => 'Plugin GitHub sync is only available on WP Toolkit targets.'];
+        }
+
+        $slug = trim((string) ($plugin['slug'] ?? $plugin['plugin_directory'] ?? ''), " \t\n\r\0\x0B/");
+        $githubUrl = rtrim(trim((string) ($plugin['github_url'] ?? '')), '/');
+        $bootstrap = trim((string) ($plugin['bootstrap'] ?? $plugin['bootstrap_file'] ?? 'initialization.php'), " \t\n\r\0\x0B/");
+        $cpanelUser = trim((string) ($plugin['cpanel_user'] ?? $target['cpanel_user'] ?? ''));
+        $wpPath = trim((string) ($plugin['wp_path'] ?? $plugin['wordpress_path'] ?? $target['wp_path'] ?? 'public_html'), '/');
+
+        if ($cpanelUser === '') {
+            return ['success' => false, 'message' => 'cPanel username is required for plugin GitHub sync.'];
+        }
+
+        return $this->wptoolkit->syncPluginFromGitHub(
+            $target['server'],
+            $cpanelUser,
+            $wpPath !== '' ? $wpPath : 'public_html',
+            $slug,
+            $githubUrl,
+            $bootstrap !== '' ? $bootstrap : 'initialization.php'
+        );
     }
 
     public function getAcfFieldInventory(array $target, array $groupKeys = [], array $fieldNames = []): array
@@ -701,16 +807,22 @@ class WordPressManagerService
         $perPage = max(1, min(100, (int) ($query["per_page"] ?? 60)));
         $page = max(1, (int) ($query["page"] ?? 1));
         $search = trim((string) ($query["search"] ?? ""));
+        $forceRefresh = (bool) ($query["force_refresh"] ?? false);
 
         if ($this->usesWpToolkit($target)) {
             if (method_exists($this->wptoolkit, "wpCliMediaSelector")) {
-                $selector = $this->wptoolkit->wpCliMediaSelector($target["server"], (int) $target["install_id"], [
+                $selectorQuery = [
                     "mime_type" => $mimeType,
                     "per_page" => $perPage,
                     "page" => $page,
                     "search" => $search,
                     "include_ids" => (array) ($query["include_ids"] ?? []),
-                ]);
+                ];
+                $loader = fn (): array => $this->wptoolkit->wpCliMediaSelector($target["server"], (int) $target["install_id"], $selectorQuery);
+                $cacheable = empty($selectorQuery["include_ids"]);
+                $selector = (!$cacheable || $forceRefresh)
+                    ? $loader()
+                    : Cache::remember($this->toolkitCacheKey($target, "media", md5(json_encode($selectorQuery))), now()->addMinutes(5), $loader);
                 $items = array_values(array_filter((array) ($selector["items"] ?? []), "is_array"));
                 return array_replace($selector, [
                     "success" => (bool) ($selector["success"] ?? false),
@@ -718,6 +830,7 @@ class WordPressManagerService
                     "items" => $items,
                     "data" => $items,
                     "source" => "wptoolkit.media_selector",
+                    "cached" => $cacheable && !$forceRefresh,
                 ]);
             }
 
@@ -776,12 +889,12 @@ class WordPressManagerService
     }
 
 
-    public function getUserProfile(array $target, int $userId): array
+    public function getUserProfile(array $target, int $userId, bool $forceRefresh = false): array
     {
         $target = $this->normalizeTarget($target);
         if ($userId <= 0) return ["success" => false, "message" => "User ID is required.", "data" => []];
 
-        $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1]);
+        $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1, "force_refresh" => $forceRefresh]);
         if (!($users["success"] ?? false)) {
             return ["success" => false, "message" => (string) ($users["message"] ?? "User lookup failed."), "data" => []];
         }
@@ -873,6 +986,9 @@ class WordPressManagerService
             $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
             $stdout = trim((string) ($result["stdout"] ?? ""));
             $failed = !($result["success"] ?? false) || str_contains(strtolower($stdout), "error") || str_contains(strtolower($stdout), "fatal");
+            if (!$failed) {
+                $this->bumpToolkitCacheVersion($target, "users");
+            }
             return ["success" => !$failed, "message" => $failed ? ($stdout ?: "User field update failed.") : "User field updated via WP Toolkit.", "data" => null];
         }
 
@@ -897,6 +1013,9 @@ class WordPressManagerService
             $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
             $stdout = trim((string) ($result["stdout"] ?? ""));
             $failed = !($result["success"] ?? false) || str_contains(strtolower($stdout), "error") || str_contains(strtolower($stdout), "fatal");
+            if (!$failed) {
+                $this->bumpToolkitCacheVersion($target, "users");
+            }
             return ["success" => !$failed, "message" => $failed ? ($stdout ?: "User meta update failed.") : "User meta updated via WP Toolkit."];
         }
 
@@ -1285,6 +1404,9 @@ class WordPressManagerService
     {
         $target = $this->normalizeTarget($target);
         if ($this->usesWpToolkit($target)) {
+            if (!$force) {
+                return $this->wpCliTrashPostViaPhp($target, $postId);
+            }
             return $this->wptoolkit->wpCliDeletePost($target["server"], (int) $target["install_id"], $postId, $force);
         }
 
@@ -1294,6 +1416,31 @@ class WordPressManagerService
             "message" => ($response["success"] ?? false) ? "Post deleted via REST." : (string) ($response["message"] ?? "Post delete failed."),
             "data" => is_array($response["data"] ?? null) ? $response["data"] : null,
         ];
+    }
+
+    protected function wpCliTrashPostViaPhp(array $target, int $postId): array
+    {
+        $parts = [
+            "\$postId=" . var_export($postId, true) . ";",
+            "\$post=get_post(\$postId);",
+            "if (!\$post) { echo \"HEXA_TRASH_POST:\" . wp_json_encode([\"success\"=>false,\"message\"=>\"Post not found.\",\"post_id\"=>\$postId]); return; }",
+            "\$oldStatus=(string) \$post->post_status;",
+            "\$trashed=wp_trash_post(\$postId);",
+            "if (!\$trashed && get_post(\$postId)) { \$updated=wp_update_post([\"ID\"=>\$postId,\"post_status\"=>\"trash\"], true); if (is_wp_error(\$updated)) { echo \"HEXA_TRASH_POST:\" . wp_json_encode([\"success\"=>false,\"message\"=>\$updated->get_error_message(),\"post_id\"=>\$postId,\"old_status\"=>\$oldStatus]); return; } }",
+            "clean_post_cache(\$postId);",
+            "\$newPost=get_post(\$postId);",
+            "\$newStatus=\$newPost ? (string) \$newPost->post_status : \"\";",
+            "\$success=(bool) (\$newPost && \$newStatus === \"trash\");",
+            "echo \"HEXA_TRASH_POST:\" . wp_json_encode([\"success\"=>\$success,\"message\"=>\$success ? \"Post moved to Trash.\" : \"Post could not be moved to Trash.\",\"post_id\"=>\$postId,\"old_status\"=>\$oldStatus,\"new_status\"=>\$newStatus,\"url\"=>\$newPost ? get_permalink(\$newPost) : \"\"]);",
+        ];
+
+        $result = $this->evaluatePhp($target, implode("", $parts));
+        if (!($result["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($result["message"] ?? "Post trash failed.")];
+        }
+
+        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_TRASH_POST:");
+        return is_array($payload) ? $payload : ["success" => false, "message" => "Failed to parse post trash output."];
     }
 
     public function deleteMedia(array $target, int $mediaId, bool $force = true): array
@@ -1818,6 +1965,17 @@ PHP;
         }
 
         if ($this->usesWpToolkit($target)) {
+            $existing = $this->findExistingUser($target, $login, $email);
+            if ($existing) {
+                return [
+                    "success" => true,
+                    "message" => "Existing WordPress user found; assigned it instead of creating a duplicate.",
+                    "user" => $existing,
+                    "existing" => true,
+                    "created" => false,
+                ];
+            }
+
             $command = "user create " . escapeshellarg($login) . " " . escapeshellarg($email);
             if ($displayName !== "") {
                 $command .= " --display_name=" . escapeshellarg($displayName);
@@ -1830,14 +1988,32 @@ PHP;
             $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
             $stdout = trim((string) ($result["stdout"] ?? ""));
             if (preg_match("/^\d+$/", $stdout) !== 1) {
+                $lower = strtolower($stdout);
+                if (str_contains($lower, "already registered") || str_contains($lower, "already exists") || str_contains($lower, "existing user")) {
+                    $this->bumpToolkitCacheVersion($target, "users");
+                    $existing = $this->findExistingUser($target, $login, $email, true);
+                    if ($existing) {
+                        return [
+                            "success" => true,
+                            "message" => "Existing WordPress user found after WordPress rejected duplicate creation; assigned it instead.",
+                            "user" => $existing,
+                            "existing" => true,
+                            "created" => false,
+                        ];
+                    }
+                }
+
                 return ["success" => false, "message" => $stdout !== "" ? $stdout : "User creation failed.", "user" => null];
             }
             $userId = (int) $stdout;
-            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1]);
+            $this->bumpToolkitCacheVersion($target, "users");
+            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1, "force_refresh" => true]);
             return [
                 "success" => true,
                 "message" => "User created via WP Toolkit.",
                 "user" => !empty($users["users"][0]) ? $users["users"][0] : ["id" => $userId, "ID" => $userId, "user_login" => $login, "display_name" => $displayName, "user_email" => $email, "roles" => $role !== "" ? [$role] : []],
+                "existing" => false,
+                "created" => true,
             ];
         }
 
@@ -1870,8 +2046,13 @@ PHP;
             }
             $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
             $stdout = strtolower(trim((string) ($result["stdout"] ?? "")));
+            $success = !str_contains($stdout, "error") && !str_contains($stdout, "fatal");
+            if ($success) {
+                $this->bumpToolkitCacheVersion($target, "users");
+            }
+
             return [
-                "success" => !str_contains($stdout, "error") && !str_contains($stdout, "fatal"),
+                "success" => $success,
                 "message" => trim((string) ($result["stdout"] ?? "")) ?: "User deleted via WP Toolkit.",
             ];
         }
@@ -2179,29 +2360,61 @@ PHP;
             "search" => trim((string) ($filters["search"] ?? "")),
             "include" => array_values(array_unique(array_filter(array_map("intval", (array) ($filters["include"] ?? []))))),
             "per_page" => max(1, (int) ($filters["per_page"] ?? 100)),
+            "force_refresh" => (bool) ($filters["force_refresh"] ?? false),
         ];
 
         if ($this->usesWpToolkit($target)) {
-            $parts = [
-                '$args=["fields"=>["ID","display_name","user_login","user_email","roles"]];',
-                'if (' . var_export($filters["role"] !== "", true) . ') { $args["role"]=' . var_export($filters["role"], true) . '; }',
-                'if (' . var_export($filters["search"] !== "", true) . ') { $args["search"]=' . var_export($filters["search"] !== "" ? ("*" . $filters["search"] . "*") : "", true) . '; $args["search_columns"]=["user_login","user_email","display_name"]; }',
-                'if (' . var_export($filters["include"] !== [], true) . ') { $args["include"]=' . var_export($filters["include"], true) . '; }',
-                '$users=get_users($args);',
-                '$rows=[];',
-                'foreach ($users as $user) { $rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"roles"=>array_values(array_map("strval", (array) $user->roles))]; }',
-                'echo "HEXA_USER_LIST:" . wp_json_encode($rows);',
+            $loader = function () use ($target): array {
+                $parts = [
+                    '$args=["fields"=>["ID","display_name","user_login","user_email","roles"],"number"=>9999];',
+                    '$users=get_users($args);',
+                    '$rows=[];',
+                    'foreach ($users as $user) { $rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"roles"=>array_values(array_map("strval", (array) $user->roles))]; }',
+                    'echo "HEXA_USER_LIST:" . wp_json_encode($rows);',
+                ];
+                $eval = $this->evaluatePhp($target, implode("", $parts));
+                if (!($eval["success"] ?? false)) {
+                    return ["success" => false, "message" => (string) ($eval["message"] ?? "User lookup failed."), "users" => []];
+                }
+                $payload = $this->decodeMarkedPayload((string) ($eval["stdout"] ?? ""), "HEXA_USER_LIST:");
+                if (!is_array($payload)) {
+                    return ["success" => false, "message" => "Failed to parse WP Toolkit user list output.", "users" => []];
+                }
+                $users = array_values(array_map([$this, "normalizeUserRow"], array_filter($payload, "is_array")));
+                return ["success" => true, "message" => count($users) . " user(s) loaded via WP Toolkit cache source.", "users" => $users];
+            };
+
+            $cacheKey = $this->toolkitCacheKey($target, "users");
+            if ($filters["force_refresh"]) {
+                $all = $loader();
+                if ($all["success"] ?? false) {
+                    Cache::put($cacheKey, $all, now()->addMinutes(10));
+                } else {
+                    $cached = Cache::get($cacheKey);
+                    if (($cached["success"] ?? false) && is_array($cached["users"] ?? null)) {
+                        $cached["stale"] = true;
+                        $cached["cached"] = true;
+                        $cached["fresh_error"] = (string) ($all["message"] ?? "Fresh user lookup failed.");
+                        $cached["message"] = "Fresh WordPress user inventory failed; using the last cached inventory. " . $cached["fresh_error"];
+                        $all = $cached;
+                    }
+                }
+            } else {
+                $all = Cache::remember($cacheKey, now()->addMinutes(10), $loader);
+            }
+            if (!($all["success"] ?? false)) {
+                return ["success" => false, "message" => (string) ($all["message"] ?? "User lookup failed."), "users" => []];
+            }
+
+            $users = $this->filterUserRows((array) ($all["users"] ?? []), $filters);
+            return [
+                "success" => true,
+                "message" => count($users) . " user(s) loaded via WP Toolkit cached inventory.",
+                "users" => $users,
+                "cached" => !$filters["force_refresh"] || (bool) ($all["stale"] ?? false),
+                "stale" => (bool) ($all["stale"] ?? false),
+                "fresh_error" => (string) ($all["fresh_error"] ?? ""),
             ];
-            $eval = $this->evaluatePhp($target, implode("", $parts));
-            if (!($eval["success"] ?? false)) {
-                return ["success" => false, "message" => (string) ($eval["message"] ?? "User lookup failed."), "users" => []];
-            }
-            $payload = $this->decodeMarkedPayload((string) ($eval["stdout"] ?? ""), "HEXA_USER_LIST:");
-            if (!is_array($payload)) {
-                return ["success" => false, "message" => "Failed to parse WP Toolkit user list output.", "users" => []];
-            }
-            $users = array_values(array_map([$this, "normalizeUserRow"], array_filter($payload, "is_array")));
-            return ["success" => true, "message" => count($users) . " user(s) loaded via WP Toolkit.", "users" => $users];
         }
 
         $query = [
@@ -2240,8 +2453,13 @@ PHP;
             $command = "user set-role " . $userId . " " . escapeshellarg($role);
             $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
             $stdout = strtolower(trim((string) ($result["stdout"] ?? "")));
+            $success = !str_contains($stdout, "error") && !str_contains($stdout, "fatal");
+            if ($success) {
+                $this->bumpToolkitCacheVersion($target, "users");
+            }
+
             return [
-                "success" => !str_contains($stdout, "error") && !str_contains($stdout, "fatal"),
+                "success" => $success,
                 "message" => trim((string) ($result["stdout"] ?? "")) ?: "User role updated via WP Toolkit.",
             ];
         }
@@ -2310,7 +2528,8 @@ PHP;
                     return ["success" => false, "message" => (string) ($roleResult["message"] ?? "User role update failed."), "user" => null];
                 }
             }
-            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1]);
+            $this->bumpToolkitCacheVersion($target, "users");
+            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1, "force_refresh" => true]);
             return ["success" => true, "message" => "User updated via WP Toolkit.", "user" => $users["users"][0] ?? null];
         }
 
