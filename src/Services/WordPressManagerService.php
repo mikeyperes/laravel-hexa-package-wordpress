@@ -1483,7 +1483,12 @@ class WordPressManagerService
             return ["success" => false, "message" => "PHP evaluation is only available on WP Toolkit targets.", "stdout" => ""];
         }
 
-        return $this->wptoolkit->wpCliEval($target["server"], (int) $target["install_id"], $php);
+        $result = $this->wptoolkit->wpCliEval($target["server"], (int) $target["install_id"], $php);
+        if (($result["success"] ?? false) || !str_contains((string) ($result["message"] ?? ""), "running this as root") || !method_exists($this->wptoolkit, "wpCliEvalWithPlugins")) {
+            return $result;
+        }
+
+        return $this->wptoolkit->wpCliEvalWithPlugins($target["server"], (int) $target["install_id"], $php, 120);
     }
     private function ensureToolkitTerms(array $target, array $names, string $taxonomy): array
     {
