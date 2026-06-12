@@ -934,8 +934,7 @@ class WordPressManagerService
         $command = $mediaId > 0 ? "user meta update " . $userId . " wp_user_avatar " . $mediaId : "user meta delete " . $userId . " wp_user_avatar";
         $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command);
         if ($mediaId > 0) {
-            $urlResult = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "post get " . $mediaId . " --field=guid");
-            $url = trim((string) ($urlResult["stdout"] ?? ""));
+            $url = $this->wpCliAttachmentUrl($target, $mediaId);
             $payload = serialize(["media_id" => $mediaId, "site_id" => 1, "full" => $url, 96 => $url]);
             $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta update " . $userId . " wp_user_avatars " . escapeshellarg($payload));
         } else {
@@ -1954,6 +1953,26 @@ PHP;
             $caption,
             $description,
         );
+    }
+
+    private function wpCliAttachmentUrl(array $target, int $mediaId): string
+    {
+        $target = $this->normalizeTarget($target);
+        if (!$this->usesWpToolkit($target) || $mediaId <= 0) {
+            return "";
+        }
+
+        $code = "echo wp_get_attachment_url(" . $mediaId . ");";
+        $eval = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "eval " . escapeshellarg($code), 120);
+        $url = trim((string) ($eval["stdout"] ?? ""));
+        if (filter_var($url, FILTER_VALIDATE_URL)) {
+            return $url;
+        }
+
+        $guid = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "post get " . $mediaId . " --field=guid", 120);
+        $url = trim((string) ($guid["stdout"] ?? ""));
+
+        return filter_var($url, FILTER_VALIDATE_URL) ? $url : "";
     }
 
     public function createUser(array $target, array $payload): array
