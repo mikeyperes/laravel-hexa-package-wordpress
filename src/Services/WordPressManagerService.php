@@ -4,7 +4,6 @@ namespace hexa_package_wordpress\Services;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Services\WpToolkitService;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -20,11 +19,6 @@ class WordPressManagerService
     {
         $mode = (string) ($target["mode"] ?? $target["connection_type"] ?? "");
         $server = $target["server"] ?? null;
-        if (is_array($server) && isset($server["id"])) {
-            $server = WhmServer::query()->find((int) $server["id"]);
-        } elseif (is_object($server) && !($server instanceof WhmServer) && isset($server->id)) {
-            $server = WhmServer::query()->find((int) $server->id);
-        }
         $installId = isset($target["install_id"]) ? (int) $target["install_id"] : (isset($target["wordpress_install_id"]) ? (int) $target["wordpress_install_id"] : 0);
 
         if ($mode === "") {
@@ -39,8 +33,6 @@ class WordPressManagerService
             "application_password" => (string) ($target["application_password"] ?? $target["wp_application_password"] ?? $target["app_password"] ?? ""),
             "server" => $server instanceof WhmServer ? $server : null,
             "install_id" => $installId > 0 ? $installId : null,
-            "cpanel_user" => (string) ($target["cpanel_user"] ?? $target["cpanel_username"] ?? ""),
-            "wp_path" => trim((string) ($target["wp_path"] ?? $target["wordpress_path"] ?? "public_html"), "/"),
             "default_author" => (string) ($target["default_author"] ?? ""),
             "site_id" => isset($target["site_id"]) ? (int) $target["site_id"] : null,
         ];
@@ -105,81 +97,6 @@ class WordPressManagerService
         ];
     }
 
-    private function toolkitCacheBase(array $target, string $bucket): string
-    {
-        $target = $this->normalizeTarget($target);
-        $server = $target["server"] instanceof WhmServer ? $target["server"] : null;
-        $serverKey = $server ? ((string) ($server->id ?: $server->hostname)) : "rest";
-        $installKey = (string) ($target["install_id"] ?: "0");
-
-        return "wordpress-manager:" . $bucket . ":server:" . $serverKey . ":install:" . $installKey;
-    }
-
-    private function toolkitCacheVersion(array $target, string $bucket): string
-    {
-        return (string) Cache::get($this->toolkitCacheBase($target, $bucket) . ":version", "1");
-    }
-
-    private function toolkitCacheKey(array $target, string $bucket, string $suffix = ""): string
-    {
-        return $this->toolkitCacheBase($target, $bucket) . ":v" . $this->toolkitCacheVersion($target, $bucket) . ($suffix !== "" ? (":" . $suffix) : "");
-    }
-
-    private function bumpToolkitCacheVersion(array $target, string $bucket): void
-    {
-        Cache::forever($this->toolkitCacheBase($target, $bucket) . ":version", (string) microtime(true));
-    }
-
-    private function filterUserRows(array $users, array $filters): array
-    {
-        $rows = array_values(array_filter($users, "is_array"));
-        if ($filters["include"] !== []) {
-            $include = array_flip(array_map("intval", $filters["include"]));
-            $rows = array_values(array_filter($rows, static fn (array $user): bool => isset($include[(int) ($user["id"] ?? $user["ID"] ?? 0)])));
-        }
-        if ($filters["role"] !== "") {
-            $role = strtolower($filters["role"]);
-            $rows = array_values(array_filter($rows, static function (array $user) use ($role): bool {
-                $roles = array_map(static fn ($item): string => strtolower((string) $item), (array) ($user["roles"] ?? []));
-                return in_array($role, $roles, true);
-            }));
-        }
-        if ($filters["search"] !== "") {
-            $needle = strtolower($filters["search"]);
-            $rows = array_values(array_filter($rows, static function (array $user) use ($needle): bool {
-                $haystack = strtolower(trim(implode(" ", [
-                    (string) ($user["user_login"] ?? ""),
-                    (string) ($user["user_email"] ?? ""),
-                    (string) ($user["display_name"] ?? ""),
-                ])));
-                return $needle === "" || str_contains($haystack, $needle);
-            }));
-        }
-
-        return array_slice($rows, 0, $filters["per_page"]);
-    }
-
-    private function findExistingUser(array $target, string $login, string $email = "", bool $forceRefresh = false): array|null
-    {
-        $needles = array_values(array_unique(array_filter([strtolower(trim($login)), strtolower(trim($email))])));
-        if ($needles === []) {
-            return null;
-        }
-
-        foreach ($needles as $needle) {
-            $result = $this->listUsers($target, ["search" => $needle, "per_page" => 200, "force_refresh" => $forceRefresh]);
-            foreach ((array) ($result["users"] ?? []) as $user) {
-                $userLogin = strtolower(trim((string) ($user["user_login"] ?? "")));
-                $userEmail = strtolower(trim((string) ($user["user_email"] ?? "")));
-                if (($login !== "" && $userLogin === strtolower($login)) || ($email !== "" && $userEmail === strtolower($email))) {
-                    return $this->normalizeUserRow((array) $user);
-                }
-            }
-        }
-
-        return null;
-    }
-
     public function discoverInstallsForAccount(WhmServer $server, string $cpanelUsername): array
     {
         return $this->wptoolkit->getInstallsForAccount($server, $cpanelUsername);
@@ -189,6 +106,13 @@ class WordPressManagerService
     {
         $target = $this->normalizeTarget($target);
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalPostWrite($target, ["action" => "test_write"]);
+                if (($direct["success"] ?? false) === true || !str_contains((string) ($direct["message"] ?? ""), "helper is not installed")) {
+                    return $direct;
+                }
+            }
+
             return $this->wptoolkit->wpCliTestWriteAccess($target["server"], (int) $target["install_id"]);
         }
 
@@ -269,34 +193,6 @@ class WordPressManagerService
         ];
     }
 
-
-    public function syncPluginFromGitHub(array $target, array $plugin): array
-    {
-        $target = $this->normalizeTarget($target);
-        if (!$this->usesWpToolkit($target)) {
-            return ['success' => false, 'message' => 'Plugin GitHub sync is only available on WP Toolkit targets.'];
-        }
-
-        $slug = trim((string) ($plugin['slug'] ?? $plugin['plugin_directory'] ?? ''), " \t\n\r\0\x0B/");
-        $githubUrl = rtrim(trim((string) ($plugin['github_url'] ?? '')), '/');
-        $bootstrap = trim((string) ($plugin['bootstrap'] ?? $plugin['bootstrap_file'] ?? 'initialization.php'), " \t\n\r\0\x0B/");
-        $cpanelUser = trim((string) ($plugin['cpanel_user'] ?? $target['cpanel_user'] ?? ''));
-        $wpPath = trim((string) ($plugin['wp_path'] ?? $plugin['wordpress_path'] ?? $target['wp_path'] ?? 'public_html'), '/');
-
-        if ($cpanelUser === '') {
-            return ['success' => false, 'message' => 'cPanel username is required for plugin GitHub sync.'];
-        }
-
-        return $this->wptoolkit->syncPluginFromGitHub(
-            $target['server'],
-            $cpanelUser,
-            $wpPath !== '' ? $wpPath : 'public_html',
-            $slug,
-            $githubUrl,
-            $bootstrap !== '' ? $bootstrap : 'initialization.php'
-        );
-    }
-
     public function getAcfFieldInventory(array $target, array $groupKeys = [], array $fieldNames = []): array
     {
         $target = $this->normalizeTarget($target);
@@ -318,7 +214,7 @@ class WordPressManagerService
             'if (!function_exists("acf_get_field_groups") || !function_exists("acf_get_fields")) { echo "HEXA_ACF_INVENTORY:" . wp_json_encode(["success"=>false,"message"=>"ACF field APIs are unavailable.","groups"=>[],"fields_flat"=>[]]); return; }',
             '$groups=(array) acf_get_field_groups();',
             '$groupRows=[]; $flat=[];',
-            '$flatten=function(array $fields, string $groupKey, string $groupTitle, string $parentPath = "") use (&$flatten, &$flat, $fieldNames) { $rows=[]; foreach ($fields as $field) { if (!is_array($field)) { continue; } $name=(string) ($field["name"] ?? ""); $path=$parentPath !== "" && $name !== "" ? $parentPath . "." . $name : ($name !== "" ? $name : $parentPath); $row=["group_key"=>$groupKey,"group_title"=>$groupTitle,"field_key"=>(string) ($field["key"] ?? ""),"field_name"=>$name,"field_label"=>(string) ($field["label"] ?? ""),"field_type"=>(string) ($field["type"] ?? ""),"choices"=>isset($field["choices"]) && is_array($field["choices"]) ? $field["choices"] : [],"allow_null"=>(bool) ($field["allow_null"] ?? false),"multiple"=>(bool) ($field["multiple"] ?? false),"required"=>(bool) ($field["required"] ?? false),"return_format"=>(string) ($field["return_format"] ?? ""),"default_value"=>$field["default_value"] ?? null,"parent_path"=>$parentPath,"path"=>$path,"has_sub_fields"=>!empty($field["sub_fields"]),"instructions"=>(string) ($field["instructions"] ?? ""),"sub_fields"=>array_values(array_map(static function($sub){ return ["field_key"=>(string)($sub["key"] ?? ""),"field_name"=>(string)($sub["name"] ?? ""),"field_label"=>(string)($sub["label"] ?? ""),"field_type"=>(string)($sub["type"] ?? ""),"choices"=>isset($sub["choices"]) && is_array($sub["choices"]) ? $sub["choices"] : [],"required"=>(bool)($sub["required"] ?? false),"instructions"=>(string)($sub["instructions"] ?? "")]; }, array_values(array_filter((array)($field["sub_fields"] ?? []), "is_array"))))]; $rows[]=$row; if ($name !== "" && ($fieldNames === [] || in_array($name, $fieldNames, true))) { $flat[]=$row; } if (!empty($field["sub_fields"]) && is_array($field["sub_fields"])) { $rows=array_merge($rows, $flatten($field["sub_fields"], $groupKey, $groupTitle, $path)); } } return $rows; };',
+            '$flatten=function(array $fields, string $groupKey, string $groupTitle, string $parentPath = "") use (&$flatten, &$flat, $fieldNames) { $rows=[]; foreach ($fields as $field) { if (!is_array($field)) { continue; } $name=(string) ($field["name"] ?? ""); $path=$parentPath !== "" && $name !== "" ? $parentPath . "." . $name : ($name !== "" ? $name : $parentPath); $row=["group_key"=>$groupKey,"group_title"=>$groupTitle,"field_key"=>(string) ($field["key"] ?? ""),"field_name"=>$name,"field_label"=>(string) ($field["label"] ?? ""),"field_type"=>(string) ($field["type"] ?? ""),"parent_path"=>$parentPath,"path"=>$path,"has_sub_fields"=>!empty($field["sub_fields"]),"instructions"=>(string) ($field["instructions"] ?? "")]; $rows[]=$row; if ($name !== "" && ($fieldNames === [] || in_array($name, $fieldNames, true))) { $flat[]=$row; } if (!empty($field["sub_fields"]) && is_array($field["sub_fields"])) { $rows=array_merge($rows, $flatten($field["sub_fields"], $groupKey, $groupTitle, $path)); } } return $rows; };',
             'foreach ($groups as $group) { if (!is_array($group)) { continue; } $groupKey=(string) ($group["key"] ?? ""); if ($groupKeys !== [] && !in_array($groupKey, $groupKeys, true)) { continue; } $groupTitle=(string) ($group["title"] ?? $groupKey); $fields=(array) acf_get_fields($group); $flattened=$flatten($fields, $groupKey, $groupTitle); $groupRows[]=["key"=>$groupKey,"title"=>$groupTitle,"field_count"=>count($flattened),"location"=>$group["location"] ?? [],"fields"=>$flattened]; }',
             'echo "HEXA_ACF_INVENTORY:" . wp_json_encode(["success"=>true,"message"=>count($groupRows) . " field group(s) loaded.","groups"=>$groupRows,"fields_flat"=>$flat]);',
         ];
@@ -381,8 +277,7 @@ class WordPressManagerService
             'if (!function_exists("get_field") || !function_exists("get_field_objects")) { echo "HEXA_ACF_VALUES:" . wp_json_encode(["success"=>false,"message"=>"ACF value APIs are unavailable.","selector"=>$selector,"values"=>[],"available_fields"=>[]]); return; }',
             '$objects=get_field_objects($selector, false, true, false); if (!is_array($objects)) { $objects=[]; }',
             '$values=[];',
-            '$readAcfValue=function($fieldName) use ($selector,$objects){ $value=get_field((string)$fieldName,$selector,false); $field=is_array($objects) && isset($objects[$fieldName]) && is_array($objects[$fieldName]) ? $objects[$fieldName] : null; $type=is_array($field) ? (string)($field["type"] ?? "") : ""; if ($type==="repeater" && !is_array($value)) { $formatted=get_field((string)$fieldName,$selector,true); if (is_array($formatted)) { $value=$formatted; } } return $value; };',
-            'if ($fieldNames !== []) { foreach ($fieldNames as $fieldName) { $values[$fieldName]=$readAcfValue((string)$fieldName); } } else { foreach ($objects as $fieldName => $field) { $values[(string) $fieldName]=$readAcfValue((string)$fieldName); } }',
+            'if ($fieldNames !== []) { foreach ($fieldNames as $fieldName) { $values[$fieldName]=get_field($fieldName, $selector, false); } } else { foreach ($objects as $fieldName => $field) { $values[(string) $fieldName]=$field["value"] ?? get_field((string) $fieldName, $selector, false); } }',
             'echo "HEXA_ACF_VALUES:" . wp_json_encode(["success"=>true,"message"=>count($values) . " ACF value(s) loaded.","selector"=>$selector,"values"=>$values,"available_fields"=>array_values(array_map("strval", array_keys($objects)))]);',
         ];
 
@@ -410,6 +305,13 @@ class WordPressManagerService
         $target = $this->normalizeTarget($target);
 
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->listToolkitAuthorsDirect($target);
+                if (($direct["success"] ?? false) === true || !str_contains((string) ($direct["message"] ?? ""), "helper is not installed")) {
+                    return $direct;
+                }
+            }
+
             $result = $this->wptoolkit->wpCliListAdminUsers($target["server"], (int) $target["install_id"], $forceRefresh);
             $result["authors"] = array_values(array_filter((array) ($result["authors"] ?? []), static fn ($author) => is_array($author) && !empty($author["user_login"])));
             return $result;
@@ -615,6 +517,9 @@ class WordPressManagerService
         }
 
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                return $this->ensureToolkitTerms($target, $names, $taxonomy);
+            }
             if ($taxonomy === "category") {
                 return $this->wptoolkit->wpCliBatchCategories($target["server"], (int) $target["install_id"], $names);
             }
@@ -673,6 +578,22 @@ class WordPressManagerService
         $postType = trim((string) ($payload["post_type"] ?? "post")) ?: "post";
 
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalPostWrite($target, array_merge($payload, [
+                    "action" => "create",
+                ]));
+                if (($direct["success"] ?? false) === true || !str_contains((string) ($direct["message"] ?? ""), "helper is not installed")) {
+                    if (($direct["success"] ?? false) === true) {
+                        $direct = $this->attachCachePurgeResult($direct, $this->purgeLocalPostCaches(
+                            $target,
+                            (int) ($direct["data"]["post_id"] ?? 0),
+                            (string) ($direct["data"]["post_url"] ?? "")
+                        ));
+                    }
+                    return $direct;
+                }
+            }
+
             $result = $this->wptoolkit->wpCliCreatePost(
                 $target["server"],
                 (int) $target["install_id"],
@@ -691,6 +612,13 @@ class WordPressManagerService
                 foreach ((array) $payload["taxonomies"] as $taxonomy => $termIds) {
                     $this->setPostTerms($target, (int) $result["data"]["post_id"], (string) $taxonomy, (array) $termIds);
                 }
+            }
+            if (($result["success"] ?? false) && !empty($result["data"]["post_id"])) {
+                $result = $this->attachCachePurgeResult($result, $this->purgeLocalPostCaches(
+                    $target,
+                    (int) ($result["data"]["post_id"] ?? 0),
+                    (string) ($result["data"]["post_url"] ?? "")
+                ));
             }
 
             return $result;
@@ -711,11 +639,35 @@ class WordPressManagerService
         $payload = $this->normalizePostPayload($postData);
 
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalPostWrite($target, array_merge($payload, [
+                    "action" => "update",
+                    "post_id" => $postId,
+                ]));
+                if (($direct["success"] ?? false) === true || !str_contains((string) ($direct["message"] ?? ""), "helper is not installed")) {
+                    if (($direct["success"] ?? false) === true) {
+                        $direct = $this->attachCachePurgeResult($direct, $this->purgeLocalPostCaches(
+                            $target,
+                            $postId,
+                            (string) ($direct["data"]["post_url"] ?? "")
+                        ));
+                    }
+                    return $direct;
+                }
+            }
+
             $result = $this->wptoolkit->wpCliUpdatePost($target["server"], (int) $target["install_id"], $postId, $this->buildToolkitPostData($payload));
             if (($result["success"] ?? false) && !empty($payload["taxonomies"])) {
                 foreach ((array) $payload["taxonomies"] as $taxonomy => $termIds) {
                     $this->setPostTerms($target, $postId, (string) $taxonomy, (array) $termIds);
                 }
+            }
+            if (($result["success"] ?? false)) {
+                $result = $this->attachCachePurgeResult($result, $this->purgeLocalPostCaches(
+                    $target,
+                    $postId,
+                    (string) ($result["data"]["post_url"] ?? "")
+                ));
             }
             return $result;
         }
@@ -731,7 +683,14 @@ class WordPressManagerService
     public function getPost(array $target, int $postId, string $postType = "posts"): array
     {
         $target = $this->normalizeTarget($target);
-        if ($this->usesWpToolkit($target)) {
+        if ($this->usesWpToolkit($target) && $postType === "posts") {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->getToolkitPostDirect($target, $postId);
+                if (($direct["success"] ?? false) === true || !str_contains((string) ($direct["message"] ?? ""), "helper is not installed")) {
+                    return $direct;
+                }
+            }
+
             return $this->wptoolkit->wpCliGetPost($target["server"], (int) $target["install_id"], $postId);
         }
 
@@ -770,7 +729,6 @@ class WordPressManagerService
                 '    "date"=>(string) get_post_field("post_date", $postId),',
                 '    "status"=>(string) get_post_status($postId),',
                 '    "link"=>(string) get_permalink($postId),',
-                '    "slug"=>(string) get_post_field("post_name", $postId),',
                 '    "title"=>["rendered"=>(string) get_the_title($postId)],',
                 '  ];',
                 '}',
@@ -799,536 +757,20 @@ class WordPressManagerService
         ];
     }
 
-
-    public function listMedia(array $target, array $query = []): array
-    {
-        $target = $this->normalizeTarget($target);
-        $mimeType = trim((string) ($query["mime_type"] ?? "image"));
-        $perPage = max(1, min(100, (int) ($query["per_page"] ?? 60)));
-        $page = max(1, (int) ($query["page"] ?? 1));
-        $search = trim((string) ($query["search"] ?? ""));
-        $forceRefresh = (bool) ($query["force_refresh"] ?? false);
-
-        if ($this->usesWpToolkit($target)) {
-            if (method_exists($this->wptoolkit, "wpCliMediaSelector")) {
-                $selectorQuery = [
-                    "mime_type" => $mimeType,
-                    "per_page" => $perPage,
-                    "page" => $page,
-                    "search" => $search,
-                    "include_ids" => (array) ($query["include_ids"] ?? []),
-                ];
-                $loader = fn (): array => $this->wptoolkit->wpCliMediaSelector($target["server"], (int) $target["install_id"], $selectorQuery);
-                $cacheable = empty($selectorQuery["include_ids"]);
-                $selector = (!$cacheable || $forceRefresh)
-                    ? $loader()
-                    : Cache::remember($this->toolkitCacheKey($target, "media", md5(json_encode($selectorQuery))), now()->addMinutes(5), $loader);
-                $items = array_values(array_filter((array) ($selector["items"] ?? []), "is_array"));
-                return array_replace($selector, [
-                    "success" => (bool) ($selector["success"] ?? false),
-                    "message" => (string) ($selector["message"] ?? (count($items) . " media item(s) loaded via WP Toolkit selector.")),
-                    "items" => $items,
-                    "data" => $items,
-                    "source" => "wptoolkit.media_selector",
-                    "cached" => $cacheable && !$forceRefresh,
-                ]);
-            }
-
-            $parts = [
-                '$mimeType=' . var_export($mimeType, true) . ';',
-                '$perPage=' . $perPage . ';',
-                '$page=' . $page . ';',
-                '$search=' . var_export($search, true) . ';',
-                '$args=["post_type"=>"attachment","post_status"=>"inherit","posts_per_page"=>$perPage,"paged"=>$page,"orderby"=>"date","order"=>"DESC"];',
-                'if ($mimeType !== "") { $args["post_mime_type"]=$mimeType; }',
-                'if ($search !== "") { $args["s"]=$search; }',
-                '$q=new WP_Query($args);',
-                '$items=[];',
-                'foreach ($q->posts as $post) {',
-                '  $id=(int) $post->ID;',
-                '  $full=(string) wp_get_attachment_url($id);',
-                '  $sizes=[];',
-                '  foreach (["thumbnail","medium","medium_large","large","full"] as $size) { $img=wp_get_attachment_image_src($id,$size); if ($img) { $sizes[$size]=["url"=>(string)$img[0],"width"=>(int)$img[1],"height"=>(int)$img[2]]; } }',
-                '  $items[]=["ID"=>$id,"id"=>$id,"post_title"=>(string)$post->post_title,"title"=>(string)$post->post_title,"guid"=>$full,"url"=>$full,"media_url"=>$full,"source_url"=>$full,"thumbnail_url"=>(string)($sizes["thumbnail"]["url"] ?? $full),"medium_url"=>(string)($sizes["medium"]["url"] ?? ($sizes["thumbnail"]["url"] ?? $full)),"post_mime_type"=>(string)$post->post_mime_type,"mime_type"=>(string)$post->post_mime_type,"date"=>(string)$post->post_date,"alt_text"=>(string)get_post_meta($id,"_wp_attachment_image_alt",true),"sizes"=>$sizes];',
-                '}',
-                'echo "HEXA_MEDIA_LIST:" . wp_json_encode(["success"=>true,"message"=>count($items)." media item(s) loaded via WP Toolkit.","items"=>$items]);',
-            ];
-            $result = $this->evaluatePhp($target, implode("", $parts));
-            if (!($result["success"] ?? false)) {
-                return ["success" => false, "message" => (string) ($result["message"] ?? "Media list failed."), "items" => []];
-            }
-            $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_MEDIA_LIST:");
-            if (!is_array($payload)) {
-                return ["success" => false, "message" => "Failed to parse WordPress media list output.", "items" => []];
-            }
-            $items = array_values(array_filter((array) ($payload["items"] ?? []), "is_array"));
-            return ["success" => true, "message" => (string) ($payload["message"] ?? (count($items) . " media item(s) loaded.")), "items" => $items, "data" => $items];
-        }
-
-        $restQuery = ["per_page" => $perPage, "page" => $page];
-        if ($search !== "") $restQuery["search"] = $search;
-        if ($mimeType !== "") {
-            if (str_contains($mimeType, "/")) $restQuery["mime_type"] = $mimeType;
-            else $restQuery["media_type"] = $mimeType;
-        }
-        $response = $this->restRequest($target, "get", "media", [], $restQuery);
-        $items = array_values(array_filter((array) ($response["data"] ?? []), "is_array"));
-        $items = array_map(static function (array $item): array {
-            $sizes = is_array($item["media_details"]["sizes"] ?? null) ? $item["media_details"]["sizes"] : [];
-            $thumbnail = (string) ($sizes["thumbnail"]["source_url"] ?? ($item["source_url"] ?? ""));
-            $medium = (string) ($sizes["medium"]["source_url"] ?? ($thumbnail ?: ($item["source_url"] ?? "")));
-            return array_replace($item, [
-                "ID" => (int) ($item["id"] ?? 0),
-                "url" => (string) ($item["source_url"] ?? ""),
-                "media_url" => (string) ($item["source_url"] ?? ""),
-                "thumbnail_url" => $thumbnail,
-                "medium_url" => $medium,
-            ]);
-        }, $items);
-        return ["success" => (bool) ($response["success"] ?? false), "message" => ($response["success"] ?? false) ? "Media loaded via REST." : (string) ($response["message"] ?? "Media list failed."), "items" => $items, "data" => $items];
-    }
-
-
-    public function getUserProfile(array $target, int $userId, bool $forceRefresh = false): array
-    {
-        $target = $this->normalizeTarget($target);
-        if ($userId <= 0) return ["success" => false, "message" => "User ID is required.", "data" => []];
-
-        $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1, "force_refresh" => $forceRefresh]);
-        if (!($users["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($users["message"] ?? "User lookup failed."), "data" => []];
-        }
-
-        $data = is_array($users["users"][0] ?? null) ? $users["users"][0] : [];
-        if ($data === []) {
-            return ["success" => false, "message" => "WordPress user #" . $userId . " was not found.", "data" => []];
-        }
-
-        if ($this->usesWpToolkit($target)) {
-            $meta = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta list " . $userId . " --format=json");
-            foreach ((array) (json_decode((string) ($meta["stdout"] ?? "[]"), true) ?: []) as $row) {
-                if (is_array($row)) $data[(string) ($row["meta_key"] ?? "")] = (string) ($row["meta_value"] ?? "");
-            }
-            if (empty($data["avatar_url"]) && !empty($data["wp_user_avatars"])) {
-                foreach (explode(chr(34), $data["wp_user_avatars"]) as $part) {
-                    if (str_starts_with($part, "http")) { $data["avatar_url"] = $part; break; }
-                }
-            }
-            $data["avatar_media_id"] = (string) ($data["wp_user_avatar"] ?? "");
-        }
-        $data["ID"] = (string) $userId;
-        $data["wp_admin_url"] = "/wp-admin/user-edit.php?user_id=" . $userId;
-        $data["profile_admin_url"] = $data["wp_admin_url"];
-        return ["success" => true, "message" => "User profile loaded.", "data" => $data];
-    }
-
-
-    public function setUserAvatar(array $target, int $userId, ?int $mediaId, bool $deletePreviousMedia = false): array
-    {
-        $target = $this->normalizeTarget($target);
-        if ($userId <= 0) return ["success" => false, "message" => "User ID is required.", "media" => null];
-        if (!$this->usesWpToolkit($target)) return ["success" => false, "message" => "Profile avatar writes require WP Toolkit.", "media" => null];
-        $before = $this->getUserProfile($target, $userId);
-        $previous = (int) (($before["data"]["wp_user_avatar"] ?? $before["data"]["avatar_media_id"] ?? 0));
-        $mediaId = $mediaId !== null && $mediaId > 0 ? (int) $mediaId : 0;
-        $command = $mediaId > 0 ? "user meta update " . $userId . " wp_user_avatar " . $mediaId : "user meta delete " . $userId . " wp_user_avatar";
-        $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command);
-        if ($mediaId > 0) {
-            $url = $this->wpCliAttachmentUrl($target, $mediaId);
-            $payload = serialize(["media_id" => $mediaId, "site_id" => 1, "full" => $url, 96 => $url]);
-            $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta update " . $userId . " wp_user_avatars " . escapeshellarg($payload));
-        } else {
-            $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta delete " . $userId . " wp_user_avatars");
-        }
-        if ($deletePreviousMedia && $previous > 0 && $previous !== $mediaId) $this->deleteMedia($target, $previous, true);
-        $profile = $this->getUserProfile($target, $userId);
-        return ["success" => !str_contains(strtolower((string) ($result["stdout"] ?? "")), "error"), "message" => $mediaId > 0 ? "Profile avatar updated via WP Toolkit." : "Profile avatar cleared via WP Toolkit.", "media" => ["media_id" => $mediaId, "avatar_url" => (string) ($profile["data"]["avatar_url"] ?? "")]];
-    }
-
-    public function updateNativeField(array $target, string $objectType, int $objectId, string $field, string $value): array
-    {
-        $target = $this->normalizeTarget($target);
-        $objectType = strtolower(trim($objectType));
-        $field = trim($field);
-        if ($objectId <= 0 || $field === "") {
-            return ["success" => false, "message" => "A WordPress object ID and field are required."];
-        }
-
-        if ($objectType === "post") {
-            if ($field !== "post_title") {
-                return ["success" => false, "message" => "Unsupported native post field: " . $field];
-            }
-            $result = $this->updatePost($target, $objectId, ["title" => $value]);
-            return ["success" => (bool) ($result["success"] ?? false), "message" => (string) ($result["message"] ?? "Post field update finished."), "data" => $result["data"] ?? null];
-        }
-
-        if ($objectType !== "user") {
-            return ["success" => false, "message" => "Unsupported native object type: " . $objectType];
-        }
-
-        $allowed = [
-            "user_email" => "user_email",
-            "email" => "user_email",
-            "display_name" => "display_name",
-            "first_name" => "first_name",
-            "last_name" => "last_name",
-            "description" => "description",
-            "nickname" => "nickname",
-            "user_url" => "user_url",
-        ];
-        if (!isset($allowed[$field])) {
-            return ["success" => false, "message" => "Unsupported native user field: " . $field];
-        }
-
-        if ($this->usesWpToolkit($target)) {
-            $command = "user update " . $objectId . " --" . $allowed[$field] . "=" . escapeshellarg($value);
-            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
-            $stdout = trim((string) ($result["stdout"] ?? ""));
-            $failed = !($result["success"] ?? false) || str_contains(strtolower($stdout), "error") || str_contains(strtolower($stdout), "fatal");
-            if (!$failed) {
-                $this->bumpToolkitCacheVersion($target, "users");
-            }
-            return ["success" => !$failed, "message" => $failed ? ($stdout ?: "User field update failed.") : "User field updated via WP Toolkit.", "data" => null];
-        }
-
-        $payload = $allowed[$field] === "user_email" ? ["email" => $value] : ["meta" => [$field => $value]];
-        if ($field === "display_name") {
-            $payload = ["name" => $value];
-        }
-        $response = $this->restRequest($target, "post", "users/" . $objectId, $payload);
-        return ["success" => (bool) ($response["success"] ?? false), "message" => ($response["success"] ?? false) ? "User field updated via REST." : (string) ($response["message"] ?? "User field update failed."), "data" => $response["data"] ?? null];
-    }
-
-    public function updateUserMeta(array $target, int $userId, string $key, mixed $value): array
-    {
-        $target = $this->normalizeTarget($target);
-        $key = trim($key);
-        if ($userId <= 0 || $key === "") {
-            return ["success" => false, "message" => "A user ID and meta key are required."];
-        }
-
-        if ($this->usesWpToolkit($target)) {
-            $command = "user meta update " . $userId . " " . escapeshellarg($key) . " " . escapeshellarg((string) $value);
-            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
-            $stdout = trim((string) ($result["stdout"] ?? ""));
-            $failed = !($result["success"] ?? false) || str_contains(strtolower($stdout), "error") || str_contains(strtolower($stdout), "fatal");
-            if (!$failed) {
-                $this->bumpToolkitCacheVersion($target, "users");
-            }
-            return ["success" => !$failed, "message" => $failed ? ($stdout ?: "User meta update failed.") : "User meta updated via WP Toolkit."];
-        }
-
-        $response = $this->restRequest($target, "post", "users/" . $userId, ["meta" => [$key => $value]]);
-        return ["success" => (bool) ($response["success"] ?? false), "message" => ($response["success"] ?? false) ? "User meta updated via REST." : (string) ($response["message"] ?? "User meta update failed.")];
-    }
-
-    public function updateOption(array $target, string $option, mixed $value): array
-    {
-        $target = $this->normalizeTarget($target);
-        $option = trim($option);
-        if ($option === "") {
-            return ["success" => false, "message" => "An option name is required."];
-        }
-
-        if ($this->usesWpToolkit($target)) {
-            $command = "option update " . escapeshellarg($option) . " " . escapeshellarg((string) $value);
-            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
-            $stdout = trim((string) ($result["stdout"] ?? ""));
-            $failed = !($result["success"] ?? false) || str_contains(strtolower($stdout), "error") || str_contains(strtolower($stdout), "fatal");
-            return ["success" => !$failed, "message" => $failed ? ($stdout ?: "Option update failed.") : "Option updated via WP Toolkit."];
-        }
-
-        return ["success" => false, "message" => "Option updates require WP Toolkit."];
-    }
-
-
-    public function getOption(array $target, string $option, mixed $default = null): array
-    {
-        $target = $this->normalizeTarget($target);
-        $option = trim($option);
-        if ($option === "") {
-            return ["success" => false, "message" => "An option name is required.", "value" => $default];
-        }
-
-        if ($this->usesWpToolkit($target)) {
-            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "option get " . escapeshellarg($option), 120);
-            $stdout = trim((string) ($result["stdout"] ?? ""));
-            $failed = !($result["success"] ?? false) || str_contains(strtolower($stdout), "error") || str_contains(strtolower($stdout), "fatal");
-            return [
-                "success" => !$failed,
-                "message" => $failed ? ($stdout ?: "Option lookup failed.") : "Option loaded via WP Toolkit.",
-                "value" => $failed ? $default : $stdout,
-            ];
-        }
-
-        return ["success" => false, "message" => "Option reads require WP Toolkit.", "value" => $default];
-    }
-
-    public function getSiteIcon(array $target): array
-    {
-        $target = $this->normalizeTarget($target);
-        $parts = [
-            '$id=(int) get_option("site_icon");',
-            '$url="";',
-            'if (function_exists("get_site_icon_url")) { $url=(string) get_site_icon_url(512); }',
-            'if ($url==="" && $id>0 && function_exists("wp_get_attachment_image_url")) { $u=wp_get_attachment_image_url($id,"full"); if ($u) { $url=(string) $u; } }',
-            '$mediaId=$id; if ($mediaId<=0 && $url!=="" && function_exists("attachment_url_to_postid")) { $mediaId=(int) attachment_url_to_postid($url); }',
-            '$favicon_path=rtrim(ABSPATH,"/")."/favicon.ico";',
-            '$favicon_url=home_url("/favicon.ico");',
-            '$favicon_exists=@is_file($favicon_path);',
-            '$favicon_size=$favicon_exists ? (int) @filesize($favicon_path) : 0;',
-            '$head=$favicon_exists ? (string) @file_get_contents($favicon_path,false,null,0,4) : "";',
-            '$favicon_valid=($head === "\\x00\\x00\\x01\\x00");',
-            'echo "HEXA_SITE_ICON:" . wp_json_encode(["success"=>true,"site_icon_id"=>$id,"site_icon_url"=>$url,"media_id"=>$mediaId,"source"=>($url!=="" ? "wordpress_site_icon" : "none"),"wordpress_site_icon_valid"=>($id>0 && $url!==""),"favicon_ico_url"=>$favicon_url,"favicon_ico_path"=>$favicon_path,"favicon_ico_exists"=>$favicon_exists,"favicon_ico_valid"=>$favicon_valid,"favicon_ico_size"=>$favicon_size]);',
-        ];
-        $result = $this->evaluatePhp($target, implode("", $parts));
-        if (!($result["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($result["message"] ?? "Site icon lookup failed."), "site_icon_id" => 0, "site_icon_url" => "", "media_id" => 0, "source" => "none", "wordpress_site_icon_valid" => false, "favicon_ico_url" => rtrim((string) ($target["url"] ?? ""), "/") . "/favicon.ico", "favicon_ico_exists" => false, "favicon_ico_valid" => false, "favicon_ico_size" => 0];
-        }
-        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_SITE_ICON:");
-        if (!is_array($payload)) {
-            return ["success" => false, "message" => "Failed to parse site icon output.", "site_icon_id" => 0, "site_icon_url" => "", "media_id" => 0, "source" => "none", "wordpress_site_icon_valid" => false, "favicon_ico_url" => rtrim((string) ($target["url"] ?? ""), "/") . "/favicon.ico", "favicon_ico_exists" => false, "favicon_ico_valid" => false, "favicon_ico_size" => 0];
-        }
-        $payload["wordpress_site_icon_valid"] = (bool) ($payload["wordpress_site_icon_valid"] ?? ((int) ($payload["site_icon_id"] ?? 0) > 0 && (string) ($payload["site_icon_url"] ?? "") !== ""));
-        $payload["favicon_ico_url"] = (string) ($payload["favicon_ico_url"] ?? (rtrim((string) ($target["url"] ?? ""), "/") . "/favicon.ico"));
-        $payload["favicon_ico_exists"] = (bool) ($payload["favicon_ico_exists"] ?? false);
-        $payload["favicon_ico_valid"] = (bool) ($payload["favicon_ico_valid"] ?? false);
-        $payload["favicon_ico_size"] = (int) ($payload["favicon_ico_size"] ?? 0);
-        if ((string) ($payload["site_icon_url"] ?? "") === "") {
-            $fallback = $this->discoverSiteIconFallback((string) ($target["url"] ?? ""));
-            if ((string) ($fallback["url"] ?? "") !== "") {
-                $payload["site_icon_url"] = (string) $fallback["url"];
-                $payload["source"] = (string) ($fallback["source"] ?? "html_icon_link");
-                $payload["media_id"] = 0;
-            }
-        }
-        $source = (string) ($payload["source"] ?? "none");
-        $payload["message"] = ((string) ($payload["site_icon_url"] ?? "")) !== ""
-            ? ($source === "wordpress_site_icon" ? "WordPress site icon loaded." : "Favicon found via " . str_replace("_", " ", $source) . ".")
-            : "No favicon found.";
-        return $payload;
-    }
-
-    public function purgeSiteCache(array $target): array
-    {
-        $target = $this->normalizeTarget($target);
-        $parts = [
-            '$actions=[];',
-            '$warnings=[];',
-            'if (function_exists("wp_cache_flush")) { wp_cache_flush(); $actions[]="wp_cache_flush"; }',
-            '$front=(int) get_option("page_on_front"); if ($front>0 && function_exists("clean_post_cache")) { clean_post_cache($front); $actions[]="front_page_post_cache"; }',
-            'if (function_exists("clean_post_cache")) { clean_post_cache((int) get_option("site_icon")); $actions[]="site_icon_post_cache"; }',
-            'if (function_exists("delete_transient")) { delete_transient("site_icon_url"); delete_transient("_site_icon_url"); $actions[]="site_icon_transients"; }',
-            '$active=(array) get_option("active_plugins", []);',
-            '$litespeed=in_array("litespeed-cache/litespeed-cache.php", $active, true) || defined("LSCWP_V");',
-            'if ($litespeed && has_action("litespeed_purge_all")) { ob_start(); do_action("litespeed_purge_all"); ob_end_clean(); $actions[]="litespeed_purge_all"; }',
-            'elseif ($litespeed) { $warnings[]="LiteSpeed was detected, but the purge hook is unavailable in the WP Toolkit wrapper context."; }',
-            '$actions=array_values(array_unique($actions));',
-            '$message=count($actions)." WordPress cache purge action(s) requested.";',
-            'if (!empty($warnings)) { $message.=" Warning: ".implode(" ", array_values(array_unique($warnings))); }',
-            'echo "HEXA_SITE_CACHE_PURGE:" . wp_json_encode(["success"=>true,"message"=>$message,"actions"=>$actions,"warnings"=>array_values(array_unique($warnings)),"litespeed_detected"=>$litespeed]);',
-        ];
-        $result = $this->evaluatePhp($target, implode("", $parts));
-        if (!($result["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($result["message"] ?? "WordPress cache purge failed."), "actions" => [], "warnings" => []];
-        }
-        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_SITE_CACHE_PURGE:");
-        if (!is_array($payload)) {
-            return ["success" => false, "message" => "Failed to parse WordPress cache purge output.", "actions" => [], "warnings" => []];
-        }
-
-        $actions = array_values(array_unique((array) ($payload["actions"] ?? [])));
-        $warnings = array_values(array_filter((array) ($payload["warnings"] ?? [])));
-        $needsDirectLiteSpeed = ($payload["litespeed_detected"] ?? false)
-            && !in_array("litespeed_purge_all", $actions, true)
-            && $this->usesWpToolkit($target)
-            && method_exists($this->wptoolkit, "wpCliEvalWithPlugins");
-
-        if ($needsDirectLiteSpeed) {
-            $directPhp = '$actions=[];$warnings=[];'
-                . 'if (has_action("litespeed_purge_all")) { ob_start(); do_action("litespeed_purge_all"); ob_end_clean(); $actions[]="litespeed_purge_all"; }'
-                . 'elseif (defined("LSCWP_V")) { $warnings[]="LiteSpeed is loaded, but the purge hook is unavailable."; }'
-                . 'else { $warnings[]="LiteSpeed is not loaded in the direct wp-cli context."; }'
-                . 'echo "HEXA_LITESPEED_PURGE:" . wp_json_encode(["success"=>empty($warnings),"actions"=>$actions,"warnings"=>$warnings]);';
-            $direct = $this->wptoolkit->wpCliEvalWithPlugins($target["server"], (int) $target["install_id"], $directPhp, 45);
-            if (($direct["success"] ?? false)) {
-                $directPayload = $this->decodeMarkedPayload((string) ($direct["stdout"] ?? ""), "HEXA_LITESPEED_PURGE:");
-                if (is_array($directPayload)) {
-                    foreach ((array) ($directPayload["actions"] ?? []) as $action) {
-                        $actions[] = (string) $action;
-                    }
-                    foreach ((array) ($directPayload["warnings"] ?? []) as $warning) {
-                        $warnings[] = (string) $warning;
-                    }
-                    if (in_array("litespeed_purge_all", $actions, true)) {
-                        $warnings = array_values(array_filter($warnings, fn ($warning) => !str_contains($warning, "purge hook is unavailable")));
-                    }
-                }
-            } else {
-                $warnings[] = (string) ($direct["message"] ?? "Direct LiteSpeed purge failed.");
-            }
-        }
-
-        $actions = array_values(array_unique($actions));
-        $warnings = array_values(array_unique(array_filter($warnings)));
-        $payload["actions"] = $actions;
-        $payload["warnings"] = $warnings;
-        $payload["message"] = count($actions) . " WordPress cache purge action(s) requested.";
-        if (!empty($warnings)) {
-            $payload["message"] .= " Warning: " . implode(" ", $warnings);
-        }
-
-        return $payload;
-    }
-
-    public function createLetterSiteIcon(array $target, string $letter, array $options = []): array
-    {
-        $target = $this->normalizeTarget($target);
-        $letter = strtoupper(substr((string) preg_replace("/[^A-Za-z0-9]/", "", $letter), 0, 1));
-        if ($letter === "") {
-            $letter = "H";
-        }
-        if (!function_exists("imagecreatetruecolor") || !function_exists("imagepng")) {
-            return ["success" => false, "message" => "PHP GD is required to generate a letter favicon."];
-        }
-
-        $background = $this->hexToRgb((string) ($options["background"] ?? "#111827"), [17, 24, 39]);
-        $foreground = $this->hexToRgb((string) ($options["foreground"] ?? "#ffffff"), [255, 255, 255]);
-        $size = 512;
-        $image = imagecreatetruecolor($size, $size);
-        if (!$image) {
-            return ["success" => false, "message" => "Could not create favicon canvas."];
-        }
-        imagealphablending($image, true);
-        imagesavealpha($image, true);
-        $bg = imagecolorallocate($image, $background[0], $background[1], $background[2]);
-        $fg = imagecolorallocate($image, $foreground[0], $foreground[1], $foreground[2]);
-        imagefilledrectangle($image, 0, 0, $size, $size, $bg ?: 0);
-
-        $font = $this->firstExistingPath([
-            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/dejavu/DejaVuSansMono-Bold.ttf",
-            "/usr/share/fonts/google-droid/DroidSans-Bold.ttf",
-            "/usr/share/fonts/liberation-mono/LiberationMono-Bold.ttf",
-            "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-            "/usr/share/fonts/google-noto/NotoSans-Bold.ttf",
-        ]);
-        if ($font !== "" && function_exists("imagettfbbox") && function_exists("imagettftext")) {
-            $fontSize = (int) round($size * 0.74);
-            $box = imagettfbbox($fontSize, 0, $font, $letter);
-            $xs = [(int) $box[0], (int) $box[2], (int) $box[4], (int) $box[6]];
-            $ys = [(int) $box[1], (int) $box[3], (int) $box[5], (int) $box[7]];
-            $minX = min($xs);
-            $maxX = max($xs);
-            $minY = min($ys);
-            $maxY = max($ys);
-            $textWidth = $maxX - $minX;
-            $textHeight = $maxY - $minY;
-            $x = (int) (($size - $textWidth) / 2 - $minX);
-            $y = (int) (($size - $textHeight) / 2 - $minY);
-            imagettftext($image, $fontSize, 0, $x, $y, $fg ?: 0, $font, $letter);
-        } else {
-            $smallSize = 18;
-            $small = imagecreatetruecolor($smallSize, $smallSize);
-            imagefilledrectangle($small, 0, 0, $smallSize, $smallSize, $bg ?: 0);
-            $fontId = 5;
-            $tw = imagefontwidth($fontId) * strlen($letter);
-            $th = imagefontheight($fontId);
-            imagestring($small, $fontId, (int) (($smallSize - $tw) / 2), (int) (($smallSize - $th) / 2), $letter, $fg ?: 0);
-            $scaled = 390;
-            imagecopyresampled($image, $small, (int) (($size - $scaled) / 2), (int) (($size - $scaled) / 2), 0, 0, $scaled, $scaled, $smallSize, $smallSize);
-            imagedestroy($small);
-        }
-
-        $tmp = tempnam(sys_get_temp_dir(), "sfpf-favicon-");
-        if (!$tmp) {
-            imagedestroy($image);
-            return ["success" => false, "message" => "Could not allocate a temporary favicon file."];
-        }
-        $png = $tmp . ".png";
-        @rename($tmp, $png);
-        if (!imagepng($image, $png)) {
-            imagedestroy($image);
-            @unlink($png);
-            return ["success" => false, "message" => "Generated favicon image could not be written."];
-        }
-        imagedestroy($image);
-
-        $filename = "favicon-" . strtolower($letter) . "-" . gmdate("YmdHis") . ".png";
-        $upload = $this->uploadMedia($target, $png, $filename, "Site icon " . $letter, "", "Generated letter favicon");
-        @unlink($png);
-        $data = is_array($upload["data"] ?? null) ? $upload["data"] : [];
-        $mediaId = (int) ($data["media_id"] ?? $upload["media_id"] ?? 0);
-        if (!($upload["success"] ?? false) || $mediaId <= 0) {
-            return ["success" => false, "message" => (string) ($upload["message"] ?? "Generated favicon upload failed.")];
-        }
-        $set = $this->setSiteIcon($target, $mediaId);
-        if (!($set["success"] ?? false)) {
-            return ["success" => false, "message" => "Generated media #" . $mediaId . " but applying it as the site icon failed: " . (string) ($set["message"] ?? "")];
-        }
-        $set["source"] = "generated_letter";
-        $set["message"] = "Letter favicon generated and applied.";
-        return $set;
-    }
-
-    public function setSiteIcon(array $target, int $attachmentId): array
-    {
-        $target = $this->normalizeTarget($target);
-        if ($attachmentId <= 0) {
-            return ["success" => false, "message" => "A media attachment ID is required to set the site icon."];
-        }
-        $parts = [
-            '$id=' . $attachmentId . ';',
-            '$att=get_post($id);',
-            'if (!$att || $att->post_type!=="attachment") { echo "HEXA_SITE_ICON_SET:" . wp_json_encode(["success"=>false,"message"=>"Attachment #".$id." was not found."]); return; }',
-            'update_option("site_icon", $id);',
-            'if (function_exists("delete_transient")) { delete_transient("site_icon_url"); delete_transient("_site_icon_url"); }',
-            '$url=function_exists("get_site_icon_url") ? (string) get_site_icon_url(512) : (string) wp_get_attachment_image_url($id,"full");',
-            '$favicon_path=rtrim(ABSPATH,"/")."/favicon.ico"; $favicon_url=home_url("/favicon.ico"); $favicon_ico=false; $favicon_valid=false; $favicon_size=0; $favicon_message=""; $favicon_src=get_attached_file($id);',
-            '$make_png=function($source,$size){ $sw=(int) imagesx($source); $sh=(int) imagesy($source); if ($sw<=0 || $sh<=0) { return ""; } $canvas=imagecreatetruecolor($size,$size); if (!$canvas) { return ""; } imagealphablending($canvas,false); imagesavealpha($canvas,true); $clear=imagecolorallocatealpha($canvas,0,0,0,127); imagefilledrectangle($canvas,0,0,$size,$size,$clear); $scale=min($size/$sw,$size/$sh); $dw=max(1,(int) round($sw*$scale)); $dh=max(1,(int) round($sh*$scale)); $dx=(int) floor(($size-$dw)/2); $dy=(int) floor(($size-$dh)/2); imagecopyresampled($canvas,$source,$dx,$dy,0,0,$dw,$dh,$sw,$sh); ob_start(); imagepng($canvas); $png=(string) ob_get_clean(); imagedestroy($canvas); return $png; };',
-            '$make_ico=function($source) use ($make_png){ $images=[]; foreach ([256,32] as $size) { $data=$make_png($source,$size); if ($data!=="") { $images[]=[$size,$size,$data]; } } if (empty($images)) { return ""; } $offset=6+(count($images)*16); $dir=""; $body=""; foreach ($images as $img) { $w=(int) $img[0]; $h=(int) $img[1]; $data=(string) $img[2]; $dir.=pack("CCCCvvVV",$w>=256?0:$w,$h>=256?0:$h,0,0,1,32,strlen($data),$offset); $body.=$data; $offset+=strlen($data); } return pack("vvv",0,1,count($images)).$dir.$body; };',
-            'if (!$favicon_src || !@is_file($favicon_src)) { $favicon_message="Attachment file is unavailable, so root favicon.ico was not written."; } elseif (!function_exists("imagecreatefromstring") || !function_exists("imagecreatetruecolor") || !function_exists("imagepng")) { $favicon_message="PHP GD is unavailable, so root favicon.ico was not written."; } else { $bytes=@file_get_contents($favicon_src); $img=$bytes!==false ? @imagecreatefromstring($bytes) : false; if (!$img) { $favicon_message="Attachment image could not be decoded for favicon.ico."; } else { $ico=$make_ico($img); imagedestroy($img); if ($ico==="") { $favicon_message="Could not generate ICO bytes from the attachment."; } else { $written=@file_put_contents($favicon_path,$ico); if ($written===false) { $favicon_message="Could not write root favicon.ico."; } else { @chmod($favicon_path,0644); $favicon_ico=true; $favicon_size=(int) @filesize($favicon_path); $head=(string) @file_get_contents($favicon_path,false,null,0,4); $favicon_valid=($head === "\\x00\\x00\\x01\\x00"); if (!$favicon_valid) { $favicon_message="Root favicon.ico was written but failed ICO header validation."; } } } } }',
-            '$message=$favicon_ico && $favicon_valid ? "Site icon updated and root favicon.ico written as a valid ICO." : "Site icon updated."; if ($favicon_message!=="") { $message.=" ".$favicon_message; }',
-            'echo "HEXA_SITE_ICON_SET:" . wp_json_encode(["success"=>true,"message"=>$message,"site_icon_id"=>$id,"site_icon_url"=>$url,"media_id"=>$id,"source"=>"wordpress_site_icon","wordpress_site_icon_valid"=>($id>0 && $url!==""),"favicon_ico"=>$favicon_ico,"favicon_ico_url"=>$favicon_url,"favicon_ico_path"=>$favicon_path,"favicon_ico_exists"=>@is_file($favicon_path),"favicon_ico_valid"=>$favicon_valid,"favicon_ico_size"=>$favicon_size,"favicon_message"=>$favicon_message]);',
-        ];
-        $result = $this->evaluatePhp($target, implode("", $parts));
-        if (!($result["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($result["message"] ?? "Site icon update failed.")];
-        }
-        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_SITE_ICON_SET:");
-        return is_array($payload) ? $payload : ["success" => false, "message" => "Failed to parse site icon update output."];
-    }
-
-    public function clearSiteIcon(array $target, bool $deleteMedia = false): array
-    {
-        $target = $this->normalizeTarget($target);
-        $parts = [
-            '$prev=(int) get_option("site_icon");',
-            '$deleteMedia=' . ($deleteMedia ? "true" : "false") . ';',
-            'delete_option("site_icon");',
-            'if (function_exists("delete_transient")) { delete_transient("site_icon_url"); delete_transient("_site_icon_url"); }',
-            '$deleted=false;',
-            'if ($deleteMedia && $prev>0) { $att=get_post($prev); if ($att && $att->post_type==="attachment") { $deleted=(bool) wp_delete_attachment($prev, true); } }',
-            '$favicon_path=rtrim(ABSPATH,"/")."/favicon.ico"; $favicon_url=home_url("/favicon.ico"); $favicon_removed=false; if (@file_exists($favicon_path)) { $favicon_removed=(bool) @unlink($favicon_path); }',
-            'echo "HEXA_SITE_ICON_CLEAR:" . wp_json_encode(["success"=>true,"message"=>$favicon_removed ? "Site icon cleared and root favicon.ico removed." : "Site icon cleared.","previous_media_id"=>$prev,"deleted_previous_media"=>$deleted,"site_icon_id"=>0,"site_icon_url"=>"","media_id"=>0,"source"=>"none","wordpress_site_icon_valid"=>false,"favicon_removed"=>$favicon_removed,"favicon_ico_url"=>$favicon_url,"favicon_ico_path"=>$favicon_path,"favicon_ico_exists"=>@is_file($favicon_path),"favicon_ico_valid"=>false,"favicon_ico_size"=>0]);',
-        ];
-        $result = $this->evaluatePhp($target, implode("", $parts));
-        if (!($result["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($result["message"] ?? "Site icon clear failed.")];
-        }
-        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_SITE_ICON_CLEAR:");
-        return is_array($payload) ? $payload : ["success" => false, "message" => "Failed to parse site icon clear output."];
-    }
-
     public function uploadMedia(array $target, string $filePath, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
     {
         $target = $this->normalizeTarget($target);
         if ($this->usesWpToolkit($target)) {
-            $normalizedPath = trim($filePath);
-            if ($normalizedPath !== "" && !filter_var($normalizedPath, FILTER_VALIDATE_URL) && is_file($normalizedPath)) {
-                return $this->uploadToolkitLocalFile($target, $normalizedPath, $fileName, $altText, $caption, $description);
+            if (is_file($filePath) && is_readable($filePath)) {
+                return $this->wpCliUploadReadableLocalMedia($target, $filePath, $fileName, $altText, $caption, $description);
+            }
+
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalMediaImport($target, $filePath, $fileName, $altText, $caption, $description);
+                $helperMissing = str_contains((string) ($direct["message"] ?? ""), "helper is not installed");
+                if (($direct["success"] ?? false) === true || (!$helperMissing && !$this->shouldFallbackFromDirectLocalTransportResult($direct))) {
+                    return $direct;
+                }
             }
 
             return $this->wptoolkit->wpCliUploadMedia($target["server"], (int) $target["install_id"], $filePath, $fileName, $altText, $caption, $description);
@@ -1341,6 +783,13 @@ class WordPressManagerService
     {
         $target = $this->normalizeTarget($target);
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalMediaUpdate($target, $mediaId, $attributes);
+                if (($direct['success'] ?? false) === true || !str_contains((string) ($direct['message'] ?? ''), 'helper is not installed')) {
+                    return $direct;
+                }
+            }
+
             $parts = [
                 '$mediaId=' . (int) $mediaId . ';',
                 '$updates=' . var_export($attributes, true) . ';',
@@ -1368,44 +817,21 @@ class WordPressManagerService
         ];
     }
 
-
-    public function renameMediaFile(array $target, int $mediaId, string $fileName): array
-    {
-        $target = $this->normalizeTarget($target);
-        $fileName = trim(basename($fileName));
-        if ($mediaId <= 0 || $fileName === "") {
-            return ["success" => false, "message" => "A media ID and file name are required."];
-        }
-        $safeName = trim((string) preg_replace("/[^a-z0-9._-]+/i", "-", $fileName), "-._");
-        if ($safeName === "") {
-            return ["success" => false, "message" => "The requested file name is not valid."];
-        }
-
-        $parts = [
-            "\$mediaId=" . (int) $mediaId . ";",
-            "\$requested=" . var_export($safeName, true) . ";",
-            "\$post=get_post(\$mediaId); if (!\$post || \$post->post_type !== \"attachment\") { echo \"HEXA_MEDIA_RENAME:\" . wp_json_encode([\"success\"=>false,\"message\"=>\"Attachment not found.\"]); return; }",
-            "\$old=get_attached_file(\$mediaId); if (!\$old || !file_exists(\$old)) { echo \"HEXA_MEDIA_RENAME:\" . wp_json_encode([\"success\"=>false,\"message\"=>\"Attached file was not found on disk.\"]); return; }",
-            "\$oldExt=pathinfo(\$old, PATHINFO_EXTENSION); \$reqExt=pathinfo(\$requested, PATHINFO_EXTENSION); if (\$reqExt === \"\" && \$oldExt !== \"\") { \$requested .= \".\" . \$oldExt; }",
-            "\$requested=sanitize_file_name(\$requested); \$new=dirname(\$old) . DIRECTORY_SEPARATOR . \$requested; if (\$new !== \$old) { if (file_exists(\$new)) { echo \"HEXA_MEDIA_RENAME:\" . wp_json_encode([\"success\"=>false,\"message\"=>\"A media file with that file name already exists.\"]); return; } if (!@rename(\$old, \$new)) { echo \"HEXA_MEDIA_RENAME:\" . wp_json_encode([\"success\"=>false,\"message\"=>\"File rename failed.\"]); return; } update_attached_file(\$mediaId, \$new); }",
-            "\$uploads=wp_upload_dir(); \$relative=(string) get_post_meta(\$mediaId, \"_wp_attached_file\", true); \$url=trailingslashit(\$uploads[\"baseurl\"] ?? \"\") . ltrim(\$relative, \"/\"); wp_update_post([\"ID\"=>\$mediaId,\"post_name\"=>sanitize_title(pathinfo(\$requested, PATHINFO_FILENAME)),\"guid\"=>esc_url_raw(\$url)]); clean_post_cache(\$mediaId);",
-            "echo \"HEXA_MEDIA_RENAME:\" . wp_json_encode([\"success\"=>true,\"message\"=>\"Media file renamed.\",\"media_id\"=>\$mediaId,\"file_name\"=>\$requested,\"url\"=>wp_get_attachment_url(\$mediaId)]);",
-        ];
-        $result = $this->evaluatePhp($target, implode("", $parts));
-        if (!($result["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($result["message"] ?? "Media rename failed.")];
-        }
-        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_MEDIA_RENAME:");
-        return is_array($payload) ? $payload : ["success" => false, "message" => "Failed to parse media rename output."];
-    }
-
     public function deletePost(array $target, int $postId, bool $force = true, string $postType = "posts"): array
     {
         $target = $this->normalizeTarget($target);
-        if ($this->usesWpToolkit($target)) {
-            if (!$force) {
-                return $this->wpCliTrashPostViaPhp($target, $postId);
+        if ($this->usesWpToolkit($target) && $postType === "posts") {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalPostWrite($target, [
+                    "action" => "delete",
+                    "post_id" => $postId,
+                    "force" => $force,
+                ]);
+                if (($direct["success"] ?? false) === true || !str_contains((string) ($direct["message"] ?? ""), "helper is not installed")) {
+                    return $direct;
+                }
             }
+
             return $this->wptoolkit->wpCliDeletePost($target["server"], (int) $target["install_id"], $postId, $force);
         }
 
@@ -1417,35 +843,18 @@ class WordPressManagerService
         ];
     }
 
-    protected function wpCliTrashPostViaPhp(array $target, int $postId): array
-    {
-        $parts = [
-            "\$postId=" . var_export($postId, true) . ";",
-            "\$post=get_post(\$postId);",
-            "if (!\$post) { echo \"HEXA_TRASH_POST:\" . wp_json_encode([\"success\"=>false,\"message\"=>\"Post not found.\",\"post_id\"=>\$postId]); return; }",
-            "\$oldStatus=(string) \$post->post_status;",
-            "\$trashed=wp_trash_post(\$postId);",
-            "if (!\$trashed && get_post(\$postId)) { \$updated=wp_update_post([\"ID\"=>\$postId,\"post_status\"=>\"trash\"], true); if (is_wp_error(\$updated)) { echo \"HEXA_TRASH_POST:\" . wp_json_encode([\"success\"=>false,\"message\"=>\$updated->get_error_message(),\"post_id\"=>\$postId,\"old_status\"=>\$oldStatus]); return; } }",
-            "clean_post_cache(\$postId);",
-            "\$newPost=get_post(\$postId);",
-            "\$newStatus=\$newPost ? (string) \$newPost->post_status : \"\";",
-            "\$success=(bool) (\$newPost && \$newStatus === \"trash\");",
-            "echo \"HEXA_TRASH_POST:\" . wp_json_encode([\"success\"=>\$success,\"message\"=>\$success ? \"Post moved to Trash.\" : \"Post could not be moved to Trash.\",\"post_id\"=>\$postId,\"old_status\"=>\$oldStatus,\"new_status\"=>\$newStatus,\"url\"=>\$newPost ? get_permalink(\$newPost) : \"\"]);",
-        ];
-
-        $result = $this->evaluatePhp($target, implode("", $parts));
-        if (!($result["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($result["message"] ?? "Post trash failed.")];
-        }
-
-        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_TRASH_POST:");
-        return is_array($payload) ? $payload : ["success" => false, "message" => "Failed to parse post trash output."];
-    }
-
     public function deleteMedia(array $target, int $mediaId, bool $force = true): array
     {
         $target = $this->normalizeTarget($target);
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalMediaDelete($target, $mediaId, $force);
+                $helperMissing = str_contains((string) ($direct["message"] ?? ""), "helper is not installed");
+                if (($direct["success"] ?? false) === true || (!$helperMissing && !$this->shouldFallbackFromDirectLocalTransportResult($direct))) {
+                    return $direct;
+                }
+            }
+
             return $this->wptoolkit->wpCliDeleteMedia($target["server"], (int) $target["install_id"], $mediaId, $force);
         }
 
@@ -1457,6 +866,188 @@ class WordPressManagerService
         ];
     }
 
+    public function getUserProfile(array $target, int $userId, bool $forceRefresh = false): array
+    {
+        $target = $this->normalizeTarget($target);
+        if ($userId <= 0) {
+            return ["success" => false, "message" => "User ID is required.", "data" => []];
+        }
+
+        $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1, "force_refresh" => $forceRefresh]);
+        if (!($users["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($users["message"] ?? "User lookup failed."), "data" => []];
+        }
+
+        $data = is_array($users["users"][0] ?? null) ? $users["users"][0] : [];
+        if ($data === []) {
+            return ["success" => false, "message" => "WordPress user #" . $userId . " was not found.", "data" => []];
+        }
+
+        if ($this->usesWpToolkit($target)) {
+            $meta = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta list " . $userId . " --format=json");
+            foreach ((array) (json_decode((string) ($meta["stdout"] ?? "[]"), true) ?: []) as $row) {
+                if (is_array($row)) {
+                    $data[(string) ($row["meta_key"] ?? "")] = (string) ($row["meta_value"] ?? "");
+                }
+            }
+            if (empty($data["avatar_url"]) && !empty($data["wp_user_avatars"])) {
+                foreach (explode(chr(34), $data["wp_user_avatars"]) as $part) {
+                    if (str_starts_with($part, "http")) {
+                        $data["avatar_url"] = $part;
+                        break;
+                    }
+                }
+            }
+            $data["avatar_media_id"] = (string) ($data["wp_user_avatar"] ?? "");
+        }
+
+        $data["ID"] = (string) $userId;
+        $data["wp_admin_url"] = "/wp-admin/user-edit.php?user_id=" . $userId;
+        $data["profile_admin_url"] = $data["wp_admin_url"];
+
+        return ["success" => true, "message" => "User profile loaded.", "data" => $data];
+    }
+
+    public function setUserAvatar(array $target, int $userId, ?int $mediaId, bool $deletePreviousMedia = false): array
+    {
+        $target = $this->normalizeTarget($target);
+        if ($userId <= 0) {
+            return ["success" => false, "message" => "User ID is required.", "media" => null];
+        }
+        if (!$this->usesWpToolkit($target)) {
+            return ["success" => false, "message" => "Profile avatar writes require WP Toolkit.", "media" => null];
+        }
+
+        $before = $this->getUserProfile($target, $userId);
+        $previous = (int) (($before["data"]["wp_user_avatar"] ?? $before["data"]["avatar_media_id"] ?? 0));
+        $mediaId = $mediaId !== null && $mediaId > 0 ? (int) $mediaId : 0;
+        $command = $mediaId > 0 ? "user meta update " . $userId . " wp_user_avatar " . $mediaId : "user meta delete " . $userId . " wp_user_avatar";
+        $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command);
+        $output = strtolower(trim((string) ($result["stdout"] ?? "") . "\n" . (string) ($result["stderr"] ?? "")));
+        $failed = !($result["success"] ?? false) || str_contains($output, "error") || str_contains($output, "fatal");
+
+        if ($failed) {
+            return [
+                "success" => false,
+                "message" => trim((string) ($result["stdout"] ?? "") . "\n" . (string) ($result["stderr"] ?? "")) ?: "Profile avatar update failed.",
+                "media" => null,
+            ];
+        }
+
+        if ($mediaId > 0) {
+            $url = $this->wpCliAttachmentUrl($target, $mediaId);
+            $payload = serialize(["media_id" => $mediaId, "site_id" => 1, "full" => $url, 96 => $url]);
+            $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta update " . $userId . " wp_user_avatars " . escapeshellarg($payload));
+        } else {
+            $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta delete " . $userId . " wp_user_avatars");
+        }
+
+        if ($deletePreviousMedia && $previous > 0 && $previous !== $mediaId) {
+            $this->deleteMedia($target, $previous, true);
+        }
+
+        $profile = $this->getUserProfile($target, $userId);
+
+        return [
+            "success" => true,
+            "message" => $mediaId > 0 ? "Profile avatar updated via WP Toolkit." : "Profile avatar cleared via WP Toolkit.",
+            "media" => ["media_id" => $mediaId, "avatar_url" => (string) ($profile["data"]["avatar_url"] ?? "")],
+        ];
+    }
+
+    public function updateNativeField(array $target, string $objectType, int $objectId, string $field, string $value): array
+    {
+        $target = $this->normalizeTarget($target);
+        $objectType = strtolower(trim($objectType));
+        $field = trim($field);
+        if ($objectId <= 0 || $field === "") {
+            return ["success" => false, "message" => "A WordPress object ID and field are required."];
+        }
+
+        if ($objectType === "post") {
+            if ($field !== "post_title") {
+                return ["success" => false, "message" => "Unsupported native post field: " . $field];
+            }
+
+            $result = $this->updatePost($target, $objectId, ["title" => $value]);
+            return [
+                "success" => (bool) ($result["success"] ?? false),
+                "message" => (string) ($result["message"] ?? "Post field update finished."),
+                "data" => $result["data"] ?? null,
+            ];
+        }
+
+        if ($objectType !== "user") {
+            return ["success" => false, "message" => "Unsupported native object type: " . $objectType];
+        }
+
+        $allowed = [
+            "user_email" => "user_email",
+            "email" => "user_email",
+            "display_name" => "display_name",
+            "first_name" => "first_name",
+            "last_name" => "last_name",
+            "description" => "description",
+            "nickname" => "nickname",
+            "user_url" => "user_url",
+        ];
+        if (!isset($allowed[$field])) {
+            return ["success" => false, "message" => "Unsupported native user field: " . $field];
+        }
+
+        if ($this->usesWpToolkit($target)) {
+            $command = "user update " . $objectId . " --" . $allowed[$field] . "=" . escapeshellarg($value);
+            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
+            $output = strtolower(trim((string) ($result["stdout"] ?? "") . "\n" . (string) ($result["stderr"] ?? "")));
+            $failed = !($result["success"] ?? false) || str_contains($output, "error") || str_contains($output, "fatal");
+
+            return [
+                "success" => !$failed,
+                "message" => $failed ? (trim((string) ($result["stdout"] ?? "") . "\n" . (string) ($result["stderr"] ?? "")) ?: "User field update failed.") : "User field updated via WP Toolkit.",
+                "data" => null,
+            ];
+        }
+
+        $payload = $allowed[$field] === "user_email" ? ["email" => $value] : ["meta" => [$field => $value]];
+        if ($field === "display_name") {
+            $payload = ["name" => $value];
+        }
+
+        $response = $this->restRequest($target, "post", "users/" . $objectId, $payload);
+        return [
+            "success" => (bool) ($response["success"] ?? false),
+            "message" => ($response["success"] ?? false) ? "User field updated via REST." : (string) ($response["message"] ?? "User field update failed."),
+            "data" => $response["data"] ?? null,
+        ];
+    }
+
+    public function updateUserMeta(array $target, int $userId, string $key, mixed $value): array
+    {
+        $target = $this->normalizeTarget($target);
+        $key = trim($key);
+        if ($userId <= 0 || $key === "") {
+            return ["success" => false, "message" => "A user ID and meta key are required."];
+        }
+
+        if ($this->usesWpToolkit($target)) {
+            $command = "user meta update " . $userId . " " . escapeshellarg($key) . " " . escapeshellarg((string) $value);
+            $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
+            $output = strtolower(trim((string) ($result["stdout"] ?? "") . "\n" . (string) ($result["stderr"] ?? "")));
+            $failed = !($result["success"] ?? false) || str_contains($output, "error") || str_contains($output, "fatal");
+
+            return [
+                "success" => !$failed,
+                "message" => $failed ? (trim((string) ($result["stdout"] ?? "") . "\n" . (string) ($result["stderr"] ?? "")) ?: "User meta update failed.") : "User meta updated via WP Toolkit.",
+            ];
+        }
+
+        $response = $this->restRequest($target, "post", "users/" . $userId, ["meta" => [$key => $value]]);
+        return [
+            "success" => (bool) ($response["success"] ?? false),
+            "message" => ($response["success"] ?? false) ? "User meta updated via REST." : (string) ($response["message"] ?? "User meta update failed."),
+        ];
+    }
+
     public function setPostTerms(array $target, int $postId, string $taxonomy, array $termIds): array
     {
         $target = $this->normalizeTarget($target);
@@ -1464,6 +1055,13 @@ class WordPressManagerService
         $termIds = array_values(array_unique(array_filter(array_map("intval", $termIds))));
 
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalPostWrite($target, ["action" => "set_terms", "post_id" => $postId, "taxonomy" => $taxonomy, "term_ids" => $termIds]);
+                if (($direct["success"] ?? false) === true || !str_contains((string) ($direct["message"] ?? ""), "helper is not installed")) {
+                    return $direct;
+                }
+            }
+
             return $this->wptoolkit->wpCliSetPostTerms($target["server"], (int) $target["install_id"], $postId, $taxonomy, $termIds);
         }
 
@@ -1482,12 +1080,91 @@ class WordPressManagerService
             return ["success" => false, "message" => "PHP evaluation is only available on WP Toolkit targets.", "stdout" => ""];
         }
 
-        $result = $this->wptoolkit->wpCliEval($target["server"], (int) $target["install_id"], $php);
-        if (($result["success"] ?? false) || !str_contains((string) ($result["message"] ?? ""), "running this as root") || !method_exists($this->wptoolkit, "wpCliEvalWithPlugins")) {
-            return $result;
+        if ($this->isLocalWhmServerTarget($target)) {
+            $direct = $this->directLocalPhpEval($target, $php);
+            $unsupported = str_contains((string) ($direct["message"] ?? ""), "Unsupported direct post action");
+            if (($direct["success"] ?? false) === true || (!$unsupported && !$this->shouldFallbackFromDirectLocalTransportResult($direct))) {
+                return $direct;
+            }
         }
 
-        return $this->wptoolkit->wpCliEvalWithPlugins($target["server"], (int) $target["install_id"], $php, 120);
+        return $this->wptoolkit->wpCliEval($target["server"], (int) $target["install_id"], $php);
+    }
+
+    private function purgeLocalPostCaches(array $target, int $postId = 0, string $postUrl = ""): array
+    {
+        $target = $this->normalizeTarget($target);
+        $postId = max(0, $postId);
+        $postUrl = trim($postUrl);
+
+        if (!$this->usesWpToolkit($target)) {
+            return ["success" => true, "message" => "No WordPress cache purge needed for REST target."];
+        }
+
+        if (!$this->isLocalWhmServerTarget($target)) {
+            return ["success" => true, "message" => "No direct WordPress cache purge available for remote WP Toolkit target."];
+        }
+
+        if ($postId <= 0 && $postUrl === "") {
+            return ["success" => true, "message" => "No WordPress post cache key was available to purge."];
+        }
+
+        $php = implode("", [
+            '$postId=' . $postId . ';',
+            '$url=' . var_export($postUrl, true) . ';',
+            '$actions=[];',
+            'if ($postId > 0 && function_exists("clean_post_cache")) { clean_post_cache($postId); $actions[]="clean_post_cache"; }',
+            'if ($postId > 0) { do_action("litespeed_purge_post", $postId); $actions[]="litespeed_purge_post"; }',
+            'if ($url !== "") { do_action("litespeed_purge_url", $url); $actions[]="litespeed_purge_url"; }',
+            'do_action("litespeed_purge_all"); $actions[]="litespeed_purge_all";',
+            'if (function_exists("rocket_clean_post") && $postId > 0) { rocket_clean_post($postId); $actions[]="rocket_clean_post"; }',
+            'if (function_exists("w3tc_flush_post") && $postId > 0) { w3tc_flush_post($postId); $actions[]="w3tc_flush_post"; }',
+            'if (function_exists("wp_cache_flush")) { wp_cache_flush(); $actions[]="wp_cache_flush"; }',
+            '$cacheRoot=defined("ABSPATH") ? dirname(rtrim((string) ABSPATH, "/")) . "/lscache" : "";',
+            '$removed=0;',
+            'if ($cacheRoot !== "" && is_dir($cacheRoot) && is_writable($cacheRoot)) {',
+            '  $it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($cacheRoot, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);',
+            '  foreach ($it as $item) {',
+            '    $path=(string) $item->getPathname();',
+            '    if ($item->isFile() || $item->isLink()) { if (@unlink($path)) { $removed++; } continue; }',
+            '    if ($item->isDir()) { @rmdir($path); }',
+            '  }',
+            '  $actions[]="filesystem_lscache_files=" . $removed;',
+            '}',
+            'echo "HEXA_CACHE_PURGE:" . wp_json_encode(["success"=>true,"post_id"=>$postId,"url"=>$url,"actions"=>$actions]);',
+        ]);
+
+        $result = $this->evaluatePhp($target, $php);
+        if (($result["success"] ?? false) !== true) {
+            return [
+                "success" => false,
+                "message" => (string) ($result["message"] ?? "WordPress cache purge was not confirmed."),
+            ];
+        }
+
+        return [
+            "success" => true,
+            "message" => "WordPress cache purge requested.",
+            "stdout" => (string) ($result["stdout"] ?? ""),
+        ];
+    }
+
+    private function attachCachePurgeResult(array $result, array $purge): array
+    {
+        if (!is_array($result["data"] ?? null)) {
+            $result["data"] = [];
+        }
+
+        $result["data"]["cache_purge"] = [
+            "success" => (bool) ($purge["success"] ?? false),
+            "message" => (string) ($purge["message"] ?? ""),
+        ];
+
+        if (($purge["success"] ?? false) !== true) {
+            $result["message"] = trim((string) ($result["message"] ?? "Post written.") . " Warning: " . (string) ($purge["message"] ?? "WordPress cache purge was not confirmed."));
+        }
+
+        return $result;
     }
     private function ensureToolkitTerms(array $target, array $names, string $taxonomy): array
     {
@@ -1524,7 +1201,7 @@ class WordPressManagerService
 
     private function normalizePostPayload(array $payload): array
     {
-        $standardKeys = ["title", "content", "status", "excerpt", "date", "featured_media", "featured_media_id", "author", "categories", "category_ids", "tags", "tag_ids", "taxonomies", "post_type", "slug", "post_name"];
+        $standardKeys = ["title", "content", "status", "excerpt", "date", "featured_media", "featured_media_id", "author", "categories", "category_ids", "tags", "tag_ids", "taxonomies", "post_type", "preserve_content"];
         $taxonomies = (array) ($payload["taxonomies"] ?? []);
 
         foreach ($payload as $key => $value) {
@@ -1537,14 +1214,14 @@ class WordPressManagerService
         }
 
         return [
-            "title" => array_key_exists("title", $payload) ? (string) ($payload["title"] ?? "") : null,
+            "title" => (string) ($payload["title"] ?? ""),
             "content" => array_key_exists("content", $payload) ? (string) ($payload["content"] ?? "") : null,
-            "status" => array_key_exists("status", $payload) ? (string) ($payload["status"] ?? "draft") : null,
+            "preserve_content" => !empty($payload["preserve_content"]),
+            "status" => (string) ($payload["status"] ?? "draft"),
             "post_type" => trim((string) ($payload["post_type"] ?? "post")) ?: "post",
-            "slug" => array_key_exists("slug", $payload) ? (string) ($payload["slug"] ?? "") : (array_key_exists("post_name", $payload) ? (string) ($payload["post_name"] ?? "") : null),
             "excerpt" => array_key_exists("excerpt", $payload) ? (string) ($payload["excerpt"] ?? "") : null,
             "date" => array_key_exists("date", $payload) ? ($payload["date"] !== null ? (string) $payload["date"] : null) : null,
-            "featured_media" => array_key_exists("featured_media", $payload) ? (int) $payload["featured_media"] : (array_key_exists("featured_media_id", $payload) ? (int) $payload["featured_media_id"] : null),
+            "featured_media" => isset($payload["featured_media"]) ? (int) $payload["featured_media"] : (isset($payload["featured_media_id"]) ? (int) $payload["featured_media_id"] : null),
             "author" => isset($payload["author"]) ? (string) $payload["author"] : null,
             "categories" => array_values(array_unique(array_filter(array_map("intval", (array) ($payload["categories"] ?? $payload["category_ids"] ?? []))))),
             "tags" => array_values(array_unique(array_filter(array_map("intval", (array) ($payload["tags"] ?? $payload["tag_ids"] ?? []))))),
@@ -1566,10 +1243,7 @@ class WordPressManagerService
         if (!empty($payload["tags"])) {
             $data["tags"] = $payload["tags"];
         }
-        if (isset($payload["slug"]) && $payload["slug"] !== null && $payload["slug"] !== "") {
-            $data["slug"] = trim((string) preg_replace("/[^a-z0-9]+/i", "-", strtolower((string) $payload["slug"])), "-");
-        }
-        if (array_key_exists("featured_media", $payload) && $payload["featured_media"] !== null) {
+        if (!empty($payload["featured_media"])) {
             $data["featured_media"] = (int) $payload["featured_media"];
         }
         return $data;
@@ -1583,10 +1257,7 @@ class WordPressManagerService
                 $data[$field] = $payload[$field];
             }
         }
-        if (isset($payload["slug"]) && $payload["slug"] !== null && $payload["slug"] !== "") {
-            $data["slug"] = trim((string) preg_replace("/[^a-z0-9]+/i", "-", strtolower((string) $payload["slug"])), "-");
-        }
-        if (array_key_exists("featured_media", $payload) && $payload["featured_media"] !== null) {
+        if (!empty($payload["featured_media"])) {
             $data["featured_media"] = (int) $payload["featured_media"];
         }
         if (!empty($payload["author"]) && is_numeric($payload["author"])) {
@@ -1602,97 +1273,6 @@ class WordPressManagerService
             $data[$this->restTaxonomyField((string) $taxonomy)] = array_values(array_unique(array_filter(array_map("intval", (array) $termIds))));
         }
         return $data;
-    }
-
-    private function discoverSiteIconFallback(string $siteUrl): array
-    {
-        $siteUrl = rtrim(trim($siteUrl), "/");
-        if ($siteUrl === "") {
-            return ["url" => "", "source" => "none"];
-        }
-
-        try {
-            $response = Http::withoutVerifying()
-                ->timeout(15)
-                ->withHeaders(["User-Agent" => "Hexa WordPress Manager"])
-                ->get($siteUrl . "/");
-            if ($response->successful()) {
-                $html = (string) $response->body();
-                if (preg_match_all('/<link\s+[^>]*>/i', $html, $matches)) {
-                    foreach ($matches[0] as $tag) {
-                        $rel = strtolower($this->htmlAttribute((string) $tag, "rel"));
-                        $href = $this->htmlAttribute((string) $tag, "href");
-                        if ($href !== "" && (str_contains($rel, "icon") || str_contains($rel, "apple-touch-icon"))) {
-                            return ["url" => $this->absoluteUrl($href, $siteUrl), "source" => "html_icon_link"];
-                        }
-                    }
-                }
-            }
-        } catch (\Throwable $e) {
-            Log::debug("WordPressManagerService::discoverSiteIconFallback html lookup failed", ["url" => $siteUrl, "error" => $e->getMessage()]);
-        }
-
-        $rootIcon = $siteUrl . "/favicon.ico";
-        try {
-            $response = Http::withoutVerifying()
-                ->timeout(10)
-                ->withHeaders(["User-Agent" => "Hexa WordPress Manager", "Range" => "bytes=0-256"])
-                ->get($rootIcon);
-            $contentType = strtolower((string) $response->header("content-type"));
-            if ($response->successful() && (str_contains($contentType, "image") || strlen((string) $response->body()) > 0)) {
-                return ["url" => $rootIcon, "source" => "root_favicon_ico"];
-            }
-        } catch (\Throwable $e) {
-            Log::debug("WordPressManagerService::discoverSiteIconFallback root lookup failed", ["url" => $rootIcon, "error" => $e->getMessage()]);
-        }
-
-        return ["url" => "", "source" => "none"];
-    }
-
-    private function htmlAttribute(string $tag, string $attribute): string
-    {
-        $attribute = preg_quote($attribute, "/");
-        if (!preg_match('/\s' . $attribute . '\s*=\s*("([^"]*)"|\'([^\']*)\'|([^\s>]+))/i', $tag, $match)) {
-            return "";
-        }
-        return html_entity_decode((string) ($match[2] ?: ($match[3] ?: ($match[4] ?? ""))), ENT_QUOTES);
-    }
-
-    private function absoluteUrl(string $url, string $base): string
-    {
-        $url = trim($url);
-        if ($url === "") {
-            return "";
-        }
-        if (str_starts_with($url, "//")) {
-            return "https:" . $url;
-        }
-        if (preg_match('/^https?:\/\//i', $url)) {
-            return $url;
-        }
-        return rtrim($base, "/") . "/" . ltrim($url, "/");
-    }
-
-    private function hexToRgb(string $hex, array $fallback): array
-    {
-        $hex = ltrim(trim($hex), "#");
-        if (strlen($hex) === 3) {
-            $hex = $hex[0] . $hex[0] . $hex[1] . $hex[1] . $hex[2] . $hex[2];
-        }
-        if (!preg_match('/^[0-9a-fA-F]{6}$/', $hex)) {
-            return $fallback;
-        }
-        return [hexdec(substr($hex, 0, 2)), hexdec(substr($hex, 2, 2)), hexdec(substr($hex, 4, 2))];
-    }
-
-    private function firstExistingPath(array $paths): string
-    {
-        foreach ($paths as $path) {
-            if (is_string($path) && is_file($path)) {
-                return $path;
-            }
-        }
-        return "";
     }
 
     private function restRequest(array $target, string $method, string $endpoint, array $body = [], array $query = []): array
@@ -1777,6 +1357,7 @@ class WordPressManagerService
             "post_status" => (string) ($post["status"] ?? ""),
             "post_title" => (string) (($post["title"]["rendered"] ?? $post["title"] ?? "") ?: ""),
             "post_date" => isset($post["date"]) ? (string) $post["date"] : null,
+            "post_content" => (string) ($post["content"]["raw"] ?? $post["content"]["rendered"] ?? $post["content"] ?? ""),
             "raw" => $post,
         ];
     }
@@ -1902,6 +1483,197 @@ PHP;
         return ["success" => true, "message" => "Post created via WP Toolkit.", "data" => is_array($parsed["data"] ?? null) ? $parsed["data"] : null];
     }
 
+    private function listToolkitAuthorsDirect(array $target): array
+    {
+        $parts = [
+            "\$roles = [\"administrator\", \"editor\", \"author\", \"contributor\"];",
+            "\$users = get_users([\"role__in\" => \$roles, \"number\" => 2000, \"orderby\" => \"display_name\", \"order\" => \"ASC\"]);",
+            "\$rows = [];",
+            "foreach ((array) \$users as \$user) {",
+            "if (!\$user instanceof WP_User) { continue; }",
+            "\$rows[] = [\"id\" => (int) \$user->ID, \"ID\" => (int) \$user->ID, \"user_login\" => (string) \$user->user_login, \"display_name\" => (string) \$user->display_name, \"email\" => (string) \$user->user_email, \"user_email\" => (string) \$user->user_email, \"slug\" => (string) \$user->user_nicename, \"user_nicename\" => (string) \$user->user_nicename, \"roles\" => array_values(array_map(\"strval\", (array) \$user->roles))];",
+            "}",
+            "echo \"HEXA_AUTHORS:\" . wp_json_encode([\"success\" => true, \"authors\" => \$rows]);",
+        ];
+        $php = str_replace("$", "$", implode("", $parts));
+        $eval = $this->evaluatePhp($target, $php);
+        if (!($eval["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($eval["message"] ?? "Direct author lookup failed."), "authors" => [], "cache_hit" => null, "cached_at" => null, "expires_at" => null];
+        }
+        $payload = $this->decodeMarkedPayload((string) ($eval["stdout"] ?? ""), "HEXA_AUTHORS:");
+        if (!is_array($payload)) {
+            return ["success" => false, "message" => "Failed to parse direct author lookup output.", "authors" => [], "cache_hit" => null, "cached_at" => null, "expires_at" => null];
+        }
+        $authors = array_values(array_filter((array) ($payload["authors"] ?? []), static fn ($author) => is_array($author) && !empty($author["user_login"])));
+        return ["success" => true, "message" => count($authors) . " author(s) loaded directly from the local WordPress install.", "authors" => $authors, "cache_hit" => false, "cached_at" => null, "expires_at" => null, "mode" => "local"];
+    }
+
+    private function getToolkitPostDirect(array $target, int $postId): array
+    {
+        $parts = [
+            "\$postId = __POST_ID__;",
+            "\$post = get_post(\$postId);",
+            "if (!\$post) { echo \"HEXA_POST_GET:\" . wp_json_encode([\"success\" => false, \"message\" => \"WordPress post not found.\"]); return; }",
+            "\$authorId = (int) \$post->post_author;",
+            "\$author = \$authorId > 0 ? get_user_by(\"id\", \$authorId) : null;",
+            "\$payload = [\"post_id\" => (int) \$post->ID, \"post_url\" => (string) (get_permalink(\$post) ?: \"\"), \"post_status\" => (string) get_post_status(\$post), \"post_title\" => (string) get_the_title(\$post), \"post_date\" => (string) get_post_field(\"post_date\", \$post), \"post_content\" => (string) \$post->post_content, \"author_id\" => \$authorId, \"author_login\" => \$author ? (string) \$author->user_login : \"\", \"author_name\" => \$author ? (string) \$author->display_name : \"\", \"author_url\" => \$author ? (string) get_author_posts_url(\$authorId) : \"\"];",
+            "echo \"HEXA_POST_GET:\" . wp_json_encode([\"success\" => true, \"data\" => \$payload]);",
+        ];
+        $php = str_replace("__POST_ID__", (string) $postId, implode("", $parts));
+        $php = str_replace("$", "$", $php);
+        $eval = $this->evaluatePhp($target, $php);
+        if (!($eval["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($eval["message"] ?? "Direct post fetch failed."), "data" => null];
+        }
+        $payload = $this->decodeMarkedPayload((string) ($eval["stdout"] ?? ""), "HEXA_POST_GET:");
+        if (!is_array($payload) || !($payload["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($payload["message"] ?? "Failed to parse direct post fetch output."), "data" => null];
+        }
+        return ["success" => true, "message" => "Post fetched directly from the local WordPress install.", "data" => is_array($payload["data"] ?? null) ? $payload["data"] : null];
+    }
+
+    private function directLocalMediaUpdate(array $target, int $mediaId, array $attributes): array
+    {
+        $wrapper = base_path("storage/app/server-tools/hexa-wp-direct-media-local.sh");
+        if (!is_file($wrapper) || !is_executable($wrapper)) { return ["success" => false, "message" => "Direct media update helper is not installed or executable."]; }
+        $cmd = escapeshellarg($wrapper) . " --instance-id=" . escapeshellarg((string) ($target["install_id"] ?? 0)) . " --media-id=" . escapeshellarg((string) $mediaId) . " --filename=" . escapeshellarg((string) ($attributes["title"] ?? "")) . " --alt=" . escapeshellarg((string) ($attributes["alt_text"] ?? "")) . " --caption=" . escapeshellarg((string) ($attributes["caption"] ?? "")) . " --description=" . escapeshellarg((string) ($attributes["description"] ?? "")) . " 2>&1";
+        return $this->runDirectMediaCommand($cmd, "Direct media update");
+    }
+
+    private function directLocalMediaImport(array $target, string $source, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
+    {
+        $wrapper = base_path("storage/app/server-tools/hexa-wp-direct-media-local.sh");
+        if (!is_file($wrapper) || !is_executable($wrapper)) { return ["success" => false, "message" => "Direct media import helper is not installed or executable."]; }
+        $source = trim($source);
+        if ($source === "") { return ["success" => false, "message" => "Media source is required."]; }
+        $cmd = escapeshellarg($wrapper) . " --instance-id=" . escapeshellarg((string) ($target["install_id"] ?? 0));
+        $cmd .= filter_var($source, FILTER_VALIDATE_URL) ? " --url=" . escapeshellarg($source) : " --local-path=" . escapeshellarg($source);
+        $cmd .= " --filename=" . escapeshellarg($fileName) . " --alt=" . escapeshellarg($altText) . " --caption=" . escapeshellarg($caption) . " --description=" . escapeshellarg($description) . " 2>&1";
+        return $this->runDirectMediaCommand($cmd, "Direct media import");
+    }
+
+    private function directLocalMediaDelete(array $target, int $mediaId, bool $force = true): array
+    {
+        $wrapper = base_path("storage/app/server-tools/hexa-wp-direct-media-local.sh");
+        if (!is_file($wrapper) || !is_executable($wrapper)) { return ["success" => false, "message" => "Direct media delete helper is not installed or executable."]; }
+        $cmd = escapeshellarg($wrapper) . " --instance-id=" . escapeshellarg((string) ($target["install_id"] ?? 0)) . " --delete-media-id=" . escapeshellarg((string) $mediaId) . " --force=" . escapeshellarg($force ? "true" : "false") . " 2>&1";
+        return $this->runDirectMediaCommand($cmd, "Direct media delete");
+    }
+
+    private function runDirectMediaCommand(string $cmd, string $label): array
+    {
+        $lines = [];
+        $exitCode = 0;
+        exec($cmd, $lines, $exitCode);
+        $raw = implode("
+", $lines);
+        $payload = $this->decodeMarkedPayload($raw, "HEXA_MEDIA_IMPORT:");
+        if (!is_array($payload)) { return ["success" => false, "message" => $label . " did not return a parseable response: " . substr(trim($raw) ?: "empty output", 0, 500)]; }
+        if (($payload["success"] ?? false) !== true) { return ["success" => false, "message" => (string) ($payload["message"] ?? ($label . " failed.")), "data" => $payload]; }
+        return ["success" => true, "message" => (string) ($payload["message"] ?? ($label . " completed.")), "data" => $payload];
+    }
+
+
+    public function createOneClickLoginUrl(array $target, string $wpUser, string $siteUrl = "", int $ttl = 300): array
+    {
+        $target = $this->normalizeTarget($target);
+        $wpUser = trim($wpUser);
+        if ($wpUser === "") {
+            return ["success" => false, "message" => "WordPress user is required for one-click login."];
+        }
+
+        if (!$this->usesWpToolkit($target) || !$this->isLocalWhmServerTarget($target)) {
+            return ["success" => false, "message" => "One-click WordPress login requires a same-server WP Toolkit target."];
+        }
+
+        $direct = $this->directLocalPostWrite($target, [
+            "action" => "one_click_login",
+            "wp_user" => $wpUser,
+            "site_url" => $siteUrl,
+            "ttl" => max(60, min(900, $ttl)),
+        ]);
+
+        if (!($direct["success"] ?? false)) {
+            return [
+                "success" => false,
+                "message" => (string) ($direct["message"] ?? "WordPress login URL could not be generated."),
+                "data" => is_array($direct["data"] ?? null) ? $direct["data"] : [],
+            ];
+        }
+
+        $data = is_array($direct["data"] ?? null) ? $direct["data"] : [];
+        return [
+            "success" => true,
+            "message" => (string) ($direct["message"] ?? "WordPress login URL generated."),
+            "url" => (string) ($data["url"] ?? ""),
+            "expires_in" => (int) ($data["expires_in"] ?? 300),
+            "wp_user" => (string) ($data["wp_user"] ?? $wpUser),
+            "data" => $data,
+        ];
+    }
+
+    private function directLocalPhpEval(array $target, string $php): array
+    {
+        $direct = $this->directLocalPostWrite($target, [
+            "action" => "eval_php",
+            "code" => $php,
+        ]);
+
+        if (!($direct["success"] ?? false)) {
+            $data = is_array($direct["data"] ?? null) ? $direct["data"] : [];
+            return [
+                "success" => false,
+                "message" => (string) ($direct["message"] ?? "Direct PHP evaluation failed."),
+                "stdout" => (string) ($data["stdout"] ?? ($direct["stdout"] ?? "")),
+            ];
+        }
+
+        $data = is_array($direct["data"] ?? null) ? $direct["data"] : [];
+        return [
+            "success" => true,
+            "message" => (string) ($direct["message"] ?? "PHP evaluated directly."),
+            "stdout" => (string) ($data["stdout"] ?? ($direct["stdout"] ?? "")),
+            "mode" => "local",
+        ];
+    }
+
+    private function directLocalPostWrite(array $target, array $payload): array
+    {
+        $wrapper = base_path("storage/app/server-tools/hexa-wp-direct-post-local.sh");
+        if (!is_file($wrapper) || !is_executable($wrapper)) {
+            return ["success" => false, "message" => "Direct post write helper is not installed or executable."];
+        }
+
+        $json = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($json === false) {
+            return ["success" => false, "message" => "Direct post write payload could not be encoded."];
+        }
+
+        $cmd = escapeshellarg($wrapper)
+            . " --instance-id=" . escapeshellarg((string) ($target["install_id"] ?? 0))
+            . " --payload-b64=" . escapeshellarg(base64_encode($json))
+            . " 2>&1";
+
+        $lines = [];
+        $exitCode = 0;
+        exec($cmd, $lines, $exitCode);
+        $raw = implode("\n", $lines);
+        $response = $this->decodeMarkedPayload($raw, "HEXA_POST_WRITE:");
+        if (!is_array($response)) {
+            return ["success" => false, "message" => "Direct post write did not return a parseable response: " . substr(trim($raw) ?: "empty output", 0, 500)];
+        }
+
+        if (($response["success"] ?? false) !== true) {
+            return ["success" => false, "message" => (string) ($response["message"] ?? "Direct post write failed."), "data" => $response];
+        }
+
+        return [
+            "success" => true,
+            "message" => (string) ($response["message"] ?? "Post written directly."),
+            "data" => is_array($response["data"] ?? null) ? $response["data"] : $response,
+        ];
+    }
+
     private function isLocalWhmServerTarget(array $target): bool
     {
         $target = $this->normalizeTarget($target);
@@ -1940,39 +1712,14 @@ PHP;
     private function uploadToolkitLocalFile(array $target, string $filePath, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
     {
         $target = $this->normalizeTarget($target);
+        if (!$this->isLocalWhmServerTarget($target)) {
+            return ["success" => false, "message" => "Toolkit local file uploads require a same-server WordPress target."];
+        }
         if (!is_file($filePath) || !is_readable($filePath)) {
             return ["success" => false, "message" => "Local media file does not exist or is not readable."];
         }
 
-        return $this->wptoolkit->wpCliImportLocalMediaFile(
-            $target["server"],
-            (int) $target["install_id"],
-            $filePath,
-            $fileName,
-            $altText,
-            $caption,
-            $description,
-        );
-    }
-
-    private function wpCliAttachmentUrl(array $target, int $mediaId): string
-    {
-        $target = $this->normalizeTarget($target);
-        if (!$this->usesWpToolkit($target) || $mediaId <= 0) {
-            return "";
-        }
-
-        $code = "echo wp_get_attachment_url(" . $mediaId . ");";
-        $eval = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "eval " . escapeshellarg($code), 120);
-        $url = trim((string) ($eval["stdout"] ?? ""));
-        if (filter_var($url, FILTER_VALIDATE_URL)) {
-            return $url;
-        }
-
-        $guid = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "post get " . $mediaId . " --field=guid", 120);
-        $url = trim((string) ($guid["stdout"] ?? ""));
-
-        return filter_var($url, FILTER_VALIDATE_URL) ? $url : "";
+        return $this->directLocalMediaImport($target, $filePath, $fileName, $altText, $caption, $description);
     }
 
     public function createUser(array $target, array $payload): array
@@ -1989,15 +1736,11 @@ PHP;
         }
 
         if ($this->usesWpToolkit($target)) {
-            $existing = $this->findExistingUser($target, $login, $email);
-            if ($existing) {
-                return [
-                    "success" => true,
-                    "message" => "Existing WordPress user found; assigned it instead of creating a duplicate.",
-                    "user" => $existing,
-                    "existing" => true,
-                    "created" => false,
-                ];
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalPostWrite($target, ["action" => "create_user", "username" => $login, "email" => $email, "display_name" => $displayName, "role" => $role, "password" => $password]);
+                if (($direct["success"] ?? false) === true || !$this->shouldFallbackFromDirectLocalUserResult($direct)) {
+                    return ["success" => (bool) ($direct["success"] ?? false), "message" => (string) ($direct["message"] ?? "User create finished."), "user" => is_array($direct["data"]["user"] ?? null) ? $direct["data"]["user"] : ($direct["user"] ?? null)];
+                }
             }
 
             $command = "user create " . escapeshellarg($login) . " " . escapeshellarg($email);
@@ -2012,32 +1755,14 @@ PHP;
             $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
             $stdout = trim((string) ($result["stdout"] ?? ""));
             if (preg_match("/^\d+$/", $stdout) !== 1) {
-                $lower = strtolower($stdout);
-                if (str_contains($lower, "already registered") || str_contains($lower, "already exists") || str_contains($lower, "existing user")) {
-                    $this->bumpToolkitCacheVersion($target, "users");
-                    $existing = $this->findExistingUser($target, $login, $email, true);
-                    if ($existing) {
-                        return [
-                            "success" => true,
-                            "message" => "Existing WordPress user found after WordPress rejected duplicate creation; assigned it instead.",
-                            "user" => $existing,
-                            "existing" => true,
-                            "created" => false,
-                        ];
-                    }
-                }
-
                 return ["success" => false, "message" => $stdout !== "" ? $stdout : "User creation failed.", "user" => null];
             }
             $userId = (int) $stdout;
-            $this->bumpToolkitCacheVersion($target, "users");
-            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1, "force_refresh" => true]);
+            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1]);
             return [
                 "success" => true,
                 "message" => "User created via WP Toolkit.",
                 "user" => !empty($users["users"][0]) ? $users["users"][0] : ["id" => $userId, "ID" => $userId, "user_login" => $login, "display_name" => $displayName, "user_email" => $email, "roles" => $role !== "" ? [$role] : []],
-                "existing" => false,
-                "created" => true,
             ];
         }
 
@@ -2064,19 +1789,21 @@ PHP;
         }
 
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalPostWrite($target, ["action" => "delete_user", "user_id" => $userId, "reassign_user_id" => $reassignUserId]);
+                if (($direct["success"] ?? false) === true || !$this->shouldFallbackFromDirectLocalUserResult($direct)) {
+                    return ["success" => (bool) ($direct["success"] ?? false), "message" => (string) ($direct["message"] ?? "User delete finished.")];
+                }
+            }
+
             $command = "user delete " . $userId . " --yes";
             if ($reassignUserId !== null && $reassignUserId > 0) {
                 $command .= " --reassign=" . $reassignUserId;
             }
             $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
             $stdout = strtolower(trim((string) ($result["stdout"] ?? "")));
-            $success = !str_contains($stdout, "error") && !str_contains($stdout, "fatal");
-            if ($success) {
-                $this->bumpToolkitCacheVersion($target, "users");
-            }
-
             return [
-                "success" => $success,
+                "success" => !str_contains($stdout, "error") && !str_contains($stdout, "fatal"),
                 "message" => trim((string) ($result["stdout"] ?? "")) ?: "User deleted via WP Toolkit.",
             ];
         }
@@ -2085,70 +1812,6 @@ PHP;
         return [
             "success" => (bool) ($response["success"] ?? false),
             "message" => ($response["success"] ?? false) ? "User deleted via REST." : (string) ($response["message"] ?? "User delete failed."),
-        ];
-    }
-
-
-    public function recreateUserWithUsername(array $target, int $userId, string $newUsername, array $options = []): array
-    {
-        $target = $this->normalizeTarget($target);
-        $newUsername = trim($newUsername);
-        $deleteOld = (bool) ($options["delete_old"] ?? true);
-        $acfPaths = array_values(array_filter(array_map("strval", (array) ($options["acf_option_user_fields"] ?? []))));
-
-        if ($userId <= 0) {
-            return ["success" => false, "message" => "Current user ID is required.", "user" => null];
-        }
-        if ($newUsername === "") {
-            return ["success" => false, "message" => "New username is required.", "user" => null];
-        }
-        if (!$this->usesWpToolkit($target)) {
-            return ["success" => false, "message" => "Username replacement requires WP Toolkit.", "user" => null];
-        }
-
-        $parts = [
-            "require_once ABSPATH . \"wp-admin/includes/user.php\";",
-            "\$oldUserId=" . $userId . ";",
-            "\$newUsername=" . var_export($newUsername, true) . ";",
-            "\$deleteOld=" . ($deleteOld ? "true" : "false") . ";",
-            "\$acfPaths=" . var_export($acfPaths, true) . ";",
-            "\$payload=[\"success\"=>false,\"message\"=>\"\",\"old_user_id\"=>\$oldUserId,\"new_user_id\"=>0,\"deleted_old\"=>false,\"acf_updates\"=>[]];",
-            "\$old=get_userdata(\$oldUserId); if (!\$old) { \$payload[\"message\"]=\"Current WordPress user was not found.\"; echo \"HEXA_USER_RECREATE:\" . wp_json_encode(\$payload); return; }",
-            "\$sanitized=sanitize_user(\$newUsername, true); if (\$sanitized === \"\" || \$sanitized !== \$newUsername) { \$payload[\"message\"]=\"Username is not valid for WordPress. Suggested sanitized value: \" . \$sanitized; echo \"HEXA_USER_RECREATE:\" . wp_json_encode(\$payload); return; }",
-            "if (\$sanitized === (string) \$old->user_login) { \$payload[\"success\"]=true; \$payload[\"message\"]=\"Username is unchanged.\"; \$payload[\"new_user_id\"]=\$oldUserId; \$payload[\"user\"]=[\"id\"=>\$oldUserId,\"ID\"=>\$oldUserId,\"user_login\"=>(string) \$old->user_login,\"display_name\"=>(string) \$old->display_name,\"user_email\"=>(string) \$old->user_email,\"roles\"=>array_values(array_map(\"strval\", (array) \$old->roles))]; echo \"HEXA_USER_RECREATE:\" . wp_json_encode(\$payload); return; }",
-            "\$existing=username_exists(\$sanitized); if (\$existing && (int) \$existing !== \$oldUserId) { \$payload[\"message\"]=\"Username already exists on the WordPress site.\"; echo \"HEXA_USER_RECREATE:\" . wp_json_encode(\$payload); return; }",
-            "\$originalEmail=(string) \$old->user_email; if (!is_email(\$originalEmail)) { \$originalEmail=\"user\" . \$oldUserId . \"@example.invalid\"; }",
-            "\$emailHolder=email_exists(\$originalEmail); if (\$emailHolder && (int) \$emailHolder !== \$oldUserId) { \$payload[\"message\"]=\"Email address belongs to another WordPress user.\"; echo \"HEXA_USER_RECREATE:\" . wp_json_encode(\$payload); return; }",
-            "\$archivedEmail=\"\"; if (\$emailHolder && (int) \$emailHolder === \$oldUserId) { \$emailParts=explode(\"@\", \$originalEmail, 2); \$local=preg_replace(\"/[^A-Za-z0-9._+-]/\", \"\", (string) (\$emailParts[0] ?? \"user\")); if (\$local === \"\") { \$local=\"user\" . \$oldUserId; } \$domain=(string) (\$emailParts[1] ?? \"example.invalid\"); \$archivedEmail=\$local . \"+archived-\" . time() . \"-\" . \$oldUserId . \"@\" . \$domain; \$archiveResult=wp_update_user([\"ID\"=>\$oldUserId,\"user_email\"=>\$archivedEmail]); if (is_wp_error(\$archiveResult)) { \$payload[\"message\"]=\$archiveResult->get_error_message(); echo \"HEXA_USER_RECREATE:\" . wp_json_encode(\$payload); return; } }",
-            "\$roles=array_values(array_map(\"strval\", (array) \$old->roles)); \$primaryRole=\$roles[0] ?? \"subscriber\";",
-            "\$userdata=[\"user_login\"=>\$sanitized,\"user_pass\"=>wp_generate_password(24, true, true),\"user_email\"=>\$originalEmail,\"display_name\"=>(string) \$old->display_name,\"user_url\"=>(string) \$old->user_url,\"first_name\"=>(string) get_user_meta(\$oldUserId, \"first_name\", true),\"last_name\"=>(string) get_user_meta(\$oldUserId, \"last_name\", true),\"description\"=>(string) get_user_meta(\$oldUserId, \"description\", true),\"nickname\"=>(string) get_user_meta(\$oldUserId, \"nickname\", true),\"role\"=>\$primaryRole];",
-            "\$newUserId=wp_insert_user(\$userdata); if (is_wp_error(\$newUserId)) { if (\$archivedEmail !== \"\") { wp_update_user([\"ID\"=>\$oldUserId,\"user_email\"=>\$originalEmail]); } \$payload[\"message\"]=\$newUserId->get_error_message(); echo \"HEXA_USER_RECREATE:\" . wp_json_encode(\$payload); return; } \$newUserId=(int) \$newUserId;",
-            "\$newWpUser=new WP_User(\$newUserId); foreach (\$roles as \$role) { if (\$role !== \"\") { \$newWpUser->add_role(\$role); } }",
-            "\$skip=[\"session_tokens\"=>true,\"wp_capabilities\"=>true,\"wp_user_level\"=>true,\"_application_passwords\"=>true]; \$allMeta=get_user_meta(\$oldUserId); foreach (\$allMeta as \$metaKey=>\$values) { \$metaKey=(string) \$metaKey; if (isset(\$skip[\$metaKey])) { continue; } delete_user_meta(\$newUserId, \$metaKey); foreach ((array) \$values as \$rawValue) { add_user_meta(\$newUserId, \$metaKey, maybe_unserialize(\$rawValue)); } }",
-            "\$setAcfPath=function(\$path) use (\$newUserId, &\$payload) { if (!function_exists(\"update_field\")) { \$payload[\"acf_updates\"][]=[\"path\"=>\$path,\"updated\"=>false,\"message\"=>\"ACF unavailable\"]; return; } \$nodes=array_values(array_filter(explode(\".\", (string) \$path), \"strlen\")); if (empty(\$nodes)) { return; } if (count(\$nodes) === 1) { \$updated=update_field(\$nodes[0], \$newUserId, \"option\"); \$payload[\"acf_updates\"][]=[\"path\"=>\$path,\"updated\"=>\$updated !== false]; return; } \$root=array_shift(\$nodes); \$group=get_field(\$root, \"option\"); if (!is_array(\$group)) { \$group=[]; } \$cursor=&\$group; while (count(\$nodes) > 1) { \$node=array_shift(\$nodes); if (!isset(\$cursor[\$node]) || !is_array(\$cursor[\$node])) { \$cursor[\$node]=[]; } \$cursor=&\$cursor[\$node]; } \$cursor[\$nodes[0]]=\$newUserId; \$updated=update_field(\$root, \$group, \"option\"); \$payload[\"acf_updates\"][]=[\"path\"=>\$path,\"updated\"=>\$updated !== false]; };",
-            "foreach (\$acfPaths as \$acfPath) { \$setAcfPath(\$acfPath); }",
-            "\$deleteOk=true; if (\$deleteOld) { \$deleteOk=wp_delete_user(\$oldUserId, \$newUserId); }",
-            "\$newUser=get_userdata(\$newUserId); \$payload[\"success\"]=\$deleteOk !== false; \$payload[\"message\"]=\$deleteOk !== false ? \"Replacement user created and founder reference updated.\" : \"Replacement user was created, but old user deletion failed.\"; \$payload[\"new_user_id\"]=\$newUserId; \$payload[\"deleted_old\"]=\$deleteOld && \$deleteOk !== false; \$payload[\"archived_old_email\"]=\$archivedEmail; \$payload[\"user\"]=[\"id\"=>\$newUserId,\"ID\"=>\$newUserId,\"user_login\"=>(string) \$newUser->user_login,\"display_name\"=>(string) \$newUser->display_name,\"user_email\"=>(string) \$newUser->user_email,\"roles\"=>array_values(array_map(\"strval\", (array) \$newUser->roles))]; echo \"HEXA_USER_RECREATE:\" . wp_json_encode(\$payload);",
-        ];
-
-        $result = $this->evaluatePhp($target, implode("", $parts));
-        if (!($result["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($result["message"] ?? "User replacement failed."), "user" => null];
-        }
-
-        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_USER_RECREATE:");
-        if (!is_array($payload)) {
-            return ["success" => false, "message" => "Failed to parse WordPress user replacement output.", "user" => null];
-        }
-
-        return [
-            "success" => (bool) ($payload["success"] ?? false),
-            "message" => (string) ($payload["message"] ?? "User replacement finished."),
-            "old_user_id" => (int) ($payload["old_user_id"] ?? $userId),
-            "new_user_id" => (int) ($payload["new_user_id"] ?? 0),
-            "deleted_old" => (bool) ($payload["deleted_old"] ?? false),
-            "acf_updates" => array_values(array_filter((array) ($payload["acf_updates"] ?? []), "is_array")),
-            "user" => is_array($payload["user"] ?? null) ? $this->normalizeUserRow((array) $payload["user"]) : null,
         ];
     }
 
@@ -2384,61 +2047,29 @@ PHP;
             "search" => trim((string) ($filters["search"] ?? "")),
             "include" => array_values(array_unique(array_filter(array_map("intval", (array) ($filters["include"] ?? []))))),
             "per_page" => max(1, (int) ($filters["per_page"] ?? 100)),
-            "force_refresh" => (bool) ($filters["force_refresh"] ?? false),
         ];
 
         if ($this->usesWpToolkit($target)) {
-            $loader = function () use ($target): array {
-                $parts = [
-                    '$args=["fields"=>["ID","display_name","user_login","user_email","roles"],"number"=>9999];',
-                    '$users=get_users($args);',
-                    '$rows=[];',
-                    'foreach ($users as $user) { $rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"roles"=>array_values(array_map("strval", (array) $user->roles))]; }',
-                    'echo "HEXA_USER_LIST:" . wp_json_encode($rows);',
-                ];
-                $eval = $this->evaluatePhp($target, implode("", $parts));
-                if (!($eval["success"] ?? false)) {
-                    return ["success" => false, "message" => (string) ($eval["message"] ?? "User lookup failed."), "users" => []];
-                }
-                $payload = $this->decodeMarkedPayload((string) ($eval["stdout"] ?? ""), "HEXA_USER_LIST:");
-                if (!is_array($payload)) {
-                    return ["success" => false, "message" => "Failed to parse WP Toolkit user list output.", "users" => []];
-                }
-                $users = array_values(array_map([$this, "normalizeUserRow"], array_filter($payload, "is_array")));
-                return ["success" => true, "message" => count($users) . " user(s) loaded via WP Toolkit cache source.", "users" => $users];
-            };
-
-            $cacheKey = $this->toolkitCacheKey($target, "users");
-            if ($filters["force_refresh"]) {
-                $all = $loader();
-                if ($all["success"] ?? false) {
-                    Cache::put($cacheKey, $all, now()->addMinutes(10));
-                } else {
-                    $cached = Cache::get($cacheKey);
-                    if (($cached["success"] ?? false) && is_array($cached["users"] ?? null)) {
-                        $cached["stale"] = true;
-                        $cached["cached"] = true;
-                        $cached["fresh_error"] = (string) ($all["message"] ?? "Fresh user lookup failed.");
-                        $cached["message"] = "Fresh WordPress user inventory failed; using the last cached inventory. " . $cached["fresh_error"];
-                        $all = $cached;
-                    }
-                }
-            } else {
-                $all = Cache::remember($cacheKey, now()->addMinutes(10), $loader);
-            }
-            if (!($all["success"] ?? false)) {
-                return ["success" => false, "message" => (string) ($all["message"] ?? "User lookup failed."), "users" => []];
-            }
-
-            $users = $this->filterUserRows((array) ($all["users"] ?? []), $filters);
-            return [
-                "success" => true,
-                "message" => count($users) . " user(s) loaded via WP Toolkit cached inventory.",
-                "users" => $users,
-                "cached" => !$filters["force_refresh"] || (bool) ($all["stale"] ?? false),
-                "stale" => (bool) ($all["stale"] ?? false),
-                "fresh_error" => (string) ($all["fresh_error"] ?? ""),
+            $parts = [
+                '$args=["fields"=>["ID","display_name","user_login","user_email","roles"]];',
+                'if (' . var_export($filters["role"] !== "", true) . ') { $args["role"]=' . var_export($filters["role"], true) . '; }',
+                'if (' . var_export($filters["search"] !== "", true) . ') { $args["search"]=' . var_export($filters["search"] !== "" ? ("*" . $filters["search"] . "*") : "", true) . '; $args["search_columns"]=["user_login","user_email","display_name"]; }',
+                'if (' . var_export($filters["include"] !== [], true) . ') { $args["include"]=' . var_export($filters["include"], true) . '; }',
+                '$users=get_users($args);',
+                '$rows=[];',
+                'foreach ($users as $user) { $rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"roles"=>array_values(array_map("strval", (array) $user->roles))]; }',
+                'echo "HEXA_USER_LIST:" . wp_json_encode($rows);',
             ];
+            $eval = $this->evaluatePhp($target, implode("", $parts));
+            if (!($eval["success"] ?? false)) {
+                return ["success" => false, "message" => (string) ($eval["message"] ?? "User lookup failed."), "users" => []];
+            }
+            $payload = $this->decodeMarkedPayload((string) ($eval["stdout"] ?? ""), "HEXA_USER_LIST:");
+            if (!is_array($payload)) {
+                return ["success" => false, "message" => "Failed to parse WP Toolkit user list output.", "users" => []];
+            }
+            $users = array_values(array_map([$this, "normalizeUserRow"], array_filter($payload, "is_array")));
+            return ["success" => true, "message" => count($users) . " user(s) loaded via WP Toolkit.", "users" => $users];
         }
 
         $query = [
@@ -2474,16 +2105,18 @@ PHP;
         }
 
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalPostWrite($target, ["action" => "set_user_role", "user_id" => $userId, "role" => $role]);
+                if (($direct["success"] ?? false) === true || !str_contains((string) ($direct["message"] ?? ""), "helper is not installed")) {
+                    return ["success" => (bool) ($direct["success"] ?? false), "message" => (string) ($direct["message"] ?? "User role update finished.")];
+                }
+            }
+
             $command = "user set-role " . $userId . " " . escapeshellarg($role);
             $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
             $stdout = strtolower(trim((string) ($result["stdout"] ?? "")));
-            $success = !str_contains($stdout, "error") && !str_contains($stdout, "fatal");
-            if ($success) {
-                $this->bumpToolkitCacheVersion($target, "users");
-            }
-
             return [
-                "success" => $success,
+                "success" => !str_contains($stdout, "error") && !str_contains($stdout, "fatal"),
                 "message" => trim((string) ($result["stdout"] ?? "")) ?: "User role updated via WP Toolkit.",
             ];
         }
@@ -2500,6 +2133,13 @@ PHP;
         }
 
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalPostWrite($target, ["action" => "update_meta", "post_id" => $postId, "meta" => $meta]);
+                if (($direct["success"] ?? false) === true || !str_contains((string) ($direct["message"] ?? ""), "helper is not installed")) {
+                    return $direct;
+                }
+            }
+
             $php = '$meta = ' . var_export($meta, true) . '; foreach ($meta as $key => $value) { update_post_meta(' . $postId . ', (string) $key, $value); } echo "HEXA_POST_META_OK";';
             $result = $this->evaluatePhp($target, $php);
             $stdout = trim((string) ($result["stdout"] ?? ""));
@@ -2538,6 +2178,13 @@ PHP;
         }
 
         if ($this->usesWpToolkit($target)) {
+            if ($this->isLocalWhmServerTarget($target)) {
+                $direct = $this->directLocalPostWrite($target, ["action" => "update_user", "user_id" => $userId, "display_name" => $displayName, "email" => $email, "role" => $role]);
+                if (($direct["success"] ?? false) === true || !$this->shouldFallbackFromDirectLocalUserResult($direct)) {
+                    return ["success" => (bool) ($direct["success"] ?? false), "message" => (string) ($direct["message"] ?? "User update finished."), "user" => is_array($direct["data"]["user"] ?? null) ? $direct["data"]["user"] : ($direct["user"] ?? null)];
+                }
+            }
+
             if ($pieces !== []) {
                 $command = "user update " . $userId . " " . implode(" ", $pieces);
                 $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
@@ -2552,8 +2199,7 @@ PHP;
                     return ["success" => false, "message" => (string) ($roleResult["message"] ?? "User role update failed."), "user" => null];
                 }
             }
-            $this->bumpToolkitCacheVersion($target, "users");
-            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1, "force_refresh" => true]);
+            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1]);
             return ["success" => true, "message" => "User updated via WP Toolkit.", "user" => $users["users"][0] ?? null];
         }
 
@@ -2573,5 +2219,151 @@ PHP;
         }
 
         return ["success" => true, "message" => "User updated via REST.", "user" => $this->normalizeUserRow((array) ($response["data"] ?? []))];
+    }
+
+    private function shouldFallbackFromDirectLocalUserResult(array $result): bool
+    {
+        if (($result["success"] ?? false) === true) {
+            return false;
+        }
+
+        $message = strtolower((string) ($result["message"] ?? ""));
+        if ($message === "") {
+            return false;
+        }
+
+        if (str_contains($message, "helper is not installed")) {
+            return true;
+        }
+
+        return $this->shouldFallbackFromDirectLocalTransportResult($result);
+    }
+
+    private function shouldFallbackFromDirectLocalTransportResult(array $result): bool
+    {
+        if (($result["success"] ?? false) === true) {
+            return false;
+        }
+
+        $message = strtolower((string) ($result["message"] ?? ""));
+        if ($message === "") {
+            return false;
+        }
+
+        foreach ([
+            "did not return a parseable response",
+            "503 service unavailable",
+            "502 bad gateway",
+            "504 gateway timeout",
+            "maintenance",
+            "connection refused",
+            "operation timed out",
+            "<!doctype html",
+            "<html",
+        ] as $needle) {
+            if (str_contains($message, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function wpCliUploadReadableLocalMedia(array $target, string $filePath, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
+    {
+        $target = $this->normalizeTarget($target);
+        if (!$this->usesWpToolkit($target)) {
+            return ["success" => false, "message" => "Local media file uploads require WP Toolkit.", "data" => null];
+        }
+
+        if (!is_file($filePath) || !is_readable($filePath)) {
+            return ["success" => false, "message" => "Local media file does not exist or is not readable.", "data" => null];
+        }
+
+        $payload = [
+            "filename" => $fileName !== "" ? $fileName : basename($filePath),
+            "contents" => base64_encode((string) file_get_contents($filePath)),
+            "alt" => $altText,
+            "caption" => $caption,
+            "description" => $description,
+        ];
+        $encoded = base64_encode((string) json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        $code = implode("", [
+            'require_once ABSPATH . "wp-admin/includes/file.php";',
+            'require_once ABSPATH . "wp-admin/includes/image.php";',
+            '$payload=json_decode(base64_decode(' . var_export($encoded, true) . '), true);',
+            'if (!is_array($payload)) { echo "HEXA_LOCAL_MEDIA:" . wp_json_encode(["success"=>false,"message"=>"Invalid local media payload."]); return; }',
+            '$bytes=base64_decode((string)($payload["contents"] ?? ""), true);',
+            'if ($bytes === false || $bytes === "") { echo "HEXA_LOCAL_MEDIA:" . wp_json_encode(["success"=>false,"message"=>"Local media payload is empty."]); return; }',
+            '$uploads=wp_upload_dir();',
+            'if (!empty($uploads["error"])) { echo "HEXA_LOCAL_MEDIA:" . wp_json_encode(["success"=>false,"message"=>(string)$uploads["error"]]); return; }',
+            '$filename=sanitize_file_name((string)($payload["filename"] ?? ""));',
+            'if ($filename === "") { $filename="hexa-upload-" . uniqid() . ".jpg"; }',
+            '$filename=wp_unique_filename($uploads["path"], $filename);',
+            '$path=trailingslashit($uploads["path"]) . $filename;',
+            'if (file_put_contents($path, $bytes) === false) { echo "HEXA_LOCAL_MEDIA:" . wp_json_encode(["success"=>false,"message"=>"Failed to write uploaded file into WordPress uploads."]); return; }',
+            '$filetype=wp_check_filetype($filename, null);',
+            '$mime=(string)($filetype["type"] ?? "");',
+            'if ($mime === "") { @unlink($path); echo "HEXA_LOCAL_MEDIA:" . wp_json_encode(["success"=>false,"message"=>"Unsupported uploaded file type."]); return; }',
+            '$attachment=["post_mime_type"=>$mime,"post_title"=>sanitize_text_field(pathinfo($filename, PATHINFO_FILENAME)),"post_content"=>(string)($payload["description"] ?? ""),"post_excerpt"=>(string)($payload["caption"] ?? ""),"post_status"=>"inherit"];',
+            '$mediaId=wp_insert_attachment($attachment, $path);',
+            'if (is_wp_error($mediaId)) { @unlink($path); echo "HEXA_LOCAL_MEDIA:" . wp_json_encode(["success"=>false,"message"=>$mediaId->get_error_message()]); return; }',
+            '$metadata=wp_generate_attachment_metadata((int)$mediaId, $path);',
+            'if (is_array($metadata)) { wp_update_attachment_metadata((int)$mediaId, $metadata); }',
+            '$alt=(string)($payload["alt"] ?? "");',
+            'if ($alt !== "") { update_post_meta((int)$mediaId, "_wp_attachment_image_alt", $alt); }',
+            '$url=wp_get_attachment_url((int)$mediaId);',
+            'echo "HEXA_LOCAL_MEDIA:" . wp_json_encode(["success"=>true,"message"=>"Media uploaded from local file.","media_id"=>(int)$mediaId,"media_url"=>(string)$url,"url"=>(string)$url,"file"=>$path]);',
+        ]);
+
+        $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "eval " . escapeshellarg($code), 120);
+        if (!($result["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($result["message"] ?? "WP-CLI local media upload failed."), "data" => null];
+        }
+
+        $parsed = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_LOCAL_MEDIA:");
+        if (!is_array($parsed)) {
+            return ["success" => false, "message" => "WP-CLI local media upload did not return a parseable response.", "data" => null];
+        }
+
+        if (($parsed["success"] ?? false) !== true) {
+            return ["success" => false, "message" => (string) ($parsed["message"] ?? "WP-CLI local media upload failed."), "data" => $parsed];
+        }
+
+        $mediaId = (int) ($parsed["media_id"] ?? 0);
+        $url = (string) ($parsed["media_url"] ?? $parsed["url"] ?? "");
+
+        return [
+            "success" => true,
+            "message" => (string) ($parsed["message"] ?? "Media uploaded from local file via WP-CLI."),
+            "media_id" => $mediaId,
+            "data" => [
+                "media_id" => $mediaId,
+                "ID" => $mediaId,
+                "id" => $mediaId,
+                "media_url" => $url,
+                "url" => $url,
+            ],
+        ];
+    }
+
+    private function wpCliAttachmentUrl(array $target, int $mediaId): string
+    {
+        $target = $this->normalizeTarget($target);
+        if (!$this->usesWpToolkit($target) || $mediaId <= 0) {
+            return "";
+        }
+
+        $code = "echo wp_get_attachment_url(" . $mediaId . ");";
+        $eval = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "eval " . escapeshellarg($code), 120);
+        $url = trim((string) ($eval["stdout"] ?? ""));
+        if (filter_var($url, FILTER_VALIDATE_URL)) {
+            return $url;
+        }
+
+        $guid = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "post get " . $mediaId . " --field=guid", 120);
+        $url = trim((string) ($guid["stdout"] ?? ""));
+
+        return filter_var($url, FILTER_VALIDATE_URL) ? $url : "";
     }
 }
