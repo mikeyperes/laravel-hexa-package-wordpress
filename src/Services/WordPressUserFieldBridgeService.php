@@ -44,28 +44,9 @@ class WordPressUserFieldBridgeService
                 continue;
             }
 
-            $notionField = $this->firstExistingField($properties, (array) ($definition["notion_fields"] ?? []));
-            $notionValue = $notionField !== "" ? $this->stringValue($properties[$notionField] ?? "") : "";
-            $wpValue = $this->readWordPressValue($wpData, $definition);
-            $canWriteWp = $this->canWriteWordPress($definition, $notionField);
-            $canWriteNotion = $this->canWriteNotion($definition, $notionField);
-
-            $rows[] = [
-                "key" => $key,
-                "label" => (string) ($definition["label"] ?? $key),
-                "notion_field" => $notionField,
-                "notion_fields" => array_values(array_map("strval", (array) ($definition["notion_fields"] ?? []))),
-                "notion_value" => $notionValue,
-                "wp_field" => $wpField,
-                "wp_type" => (string) ($definition["wp_type"] ?? "native"),
-                "wp_page" => (string) ($definition["wp_page"] ?? "profile.php"),
-                "wp_value" => $wpValue,
-                "can_write_wp" => $canWriteWp,
-                "can_write_notion" => $canWriteNotion,
-                "wp_disabled_reason" => $canWriteWp ? "" : $this->disabledReason($definition, "notion_to_wp", $notionField),
-                "notion_disabled_reason" => $canWriteNotion ? "" : $this->disabledReason($definition, "wp_to_notion", $notionField),
-                "source_transform" => (string) ($definition["source_transform"] ?? ""),
-            ];
+            foreach ($this->rowsForDefinition($properties, $wpData, $definition, $key, $wpField) as $row) {
+                $rows[] = $row;
+            }
         }
 
         return [
@@ -129,6 +110,112 @@ class WordPressUserFieldBridgeService
         $fresh["message"] = "Field value pushed.";
 
         return $fresh;
+    }
+
+    /**
+     * @param array<string, mixed> $properties
+     * @param array<string, mixed> $wpData
+     * @param array<string, mixed> $definition
+     * @return array<int, array<string, mixed>>
+     */
+    protected function rowsForDefinition(array $properties, array $wpData, array $definition, string $key, string $wpField): array
+    {
+        $wpValue = $this->readWordPressValue($wpData, $definition);
+        $targets = $this->expandedNotionTargets($properties, $definition);
+        $rows = [];
+        $isExpanded = (bool) ($definition["expand_notion_fields"] ?? false);
+        $isPhotoBridge = (bool) ($definition["photo_bridge"] ?? false) || (string) ($definition["wp_type"] ?? "native") === "profile_photo";
+
+        foreach ($targets as $index => $target) {
+            $notionField = (string) ($target["field"] ?? "");
+            $notionLabel = (string) ($target["label"] ?? "");
+            $rowKey = $isExpanded ? $key . ":" . $this->rowKeySegment($notionLabel !== "" ? $notionLabel : ($notionField !== "" ? $notionField : (string) $index)) : $key;
+            $notionValue = $notionField !== "" ? $this->stringValue($properties[$notionField] ?? "") : "";
+            $canWriteWp = $this->canWriteWordPress($definition, $notionField);
+            $canWriteNotion = $this->canWriteNotion($definition, $notionField);
+            $baseLabel = (string) ($definition["label"] ?? $key);
+
+            $rows[] = [
+                "key" => $rowKey,
+                "base_key" => $key,
+                "label" => $isExpanded && $notionLabel !== "" ? $baseLabel . " - " . $notionLabel : $baseLabel,
+                "notion_label" => $notionLabel,
+                "notion_field" => $notionField,
+                "notion_fields" => array_values(array_map("strval", (array) ($target["fields"] ?? ($definition["notion_fields"] ?? [])))),
+                "notion_value" => $notionValue,
+                "wp_field" => $wpField,
+                "wp_type" => (string) ($definition["wp_type"] ?? "native"),
+                "wp_page" => (string) ($definition["wp_page"] ?? "profile.php"),
+                "wp_value" => $wpValue,
+                "can_write_wp" => $canWriteWp,
+                "can_write_notion" => $canWriteNotion,
+                "wp_disabled_reason" => $canWriteWp ? "" : $this->disabledReason($definition, "notion_to_wp", $notionField),
+                "notion_disabled_reason" => $canWriteNotion ? "" : $this->disabledReason($definition, "wp_to_notion", $notionField),
+                "source_transform" => (string) ($definition["source_transform"] ?? ""),
+                "is_photo_bridge" => $isPhotoBridge,
+                "photo_upload" => $isPhotoBridge && (bool) ($definition["photo_upload"] ?? true),
+                "photo_role" => $notionLabel,
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param array<string, mixed> $properties
+     * @param array<string, mixed> $definition
+     * @return array<int, array{field: string, fields: array<int, string>, label: string}>
+     */
+    protected function expandedNotionTargets(array $properties, array $definition): array
+    {
+        $showMissing = (bool) ($definition["show_missing_notion_fields"] ?? false);
+        if (!($definition["expand_notion_fields"] ?? false)) {
+            $fields = array_values(array_map("strval", (array) ($definition["notion_fields"] ?? [])));
+            $field = $this->firstExistingField($properties, $fields);
+            return [["field" => $field, "fields" => $fields, "label" => ""]];
+        }
+
+        $groups = is_array($definition["notion_field_groups"] ?? null) ? $definition["notion_field_groups"] : [];
+        if ($groups === []) {
+            foreach ((array) ($definition["notion_fields"] ?? []) as $field) {
+                $field = (string) $field;
+                if ($field !== "") {
+                    $groups[] = ["label" => $field, "fields" => [$field]];
+                }
+            }
+        }
+
+        $targets = [];
+        foreach ($groups as $index => $group) {
+            if (is_array($group)) {
+                $label = trim((string) ($group["label"] ?? ""));
+                $fields = array_values(array_map("strval", (array) ($group["fields"] ?? [])));
+            } else {
+                $label = trim((string) $group);
+                $fields = [$label];
+            }
+
+            $fields = array_values(array_filter($fields, static fn (string $field): bool => trim($field) !== ""));
+            $field = $this->firstExistingField($properties, $fields);
+            if ($field === "" && !$showMissing) {
+                continue;
+            }
+
+            $targets[] = [
+                "field" => $field,
+                "fields" => $fields,
+                "label" => $label !== "" ? $label : ($field !== "" ? $field : "Field " . ((int) $index + 1)),
+            ];
+        }
+
+        return $targets;
+    }
+
+    protected function rowKeySegment(string $value): string
+    {
+        $value = strtolower(trim($value));
+        $value = preg_replace("/[^a-z0-9]+/", "_", $value) ?? $value;
+        return trim($value, "_") ?: "field";
     }
 
     /**

@@ -16,6 +16,26 @@ class WordPressUserFieldMap
     {
         return self::applyOverrides([
             [
+                "key" => "avatar_url",
+                "label" => "Profile Photo",
+                "wp_field" => "avatar_url",
+                "wp_type" => "profile_photo",
+                "wp_page" => "profile.php",
+                "notion_field_groups" => [
+                    ["label" => "Headshot", "fields" => ["Headshot", "HeadShot", "Profile Photo", "Profile Photos"]],
+                    ["label" => "Headshot PNG", "fields" => ["Headshot PNG", "HeadShot PNG", "PNG Headshot"]],
+                    ["label" => "Old Headshot", "fields" => ["Old Headshot", "Headshot old", "Headshot Old", "Headshot OLD", "Old HeadShot"]],
+                    ["label" => "Gallery", "fields" => ["Gallery", "Gallery Photos", "Personal Photos", "Personal Photo Gallery"]],
+                ],
+                "notion_fields" => ["Headshot", "Headshot PNG", "Old Headshot", "Headshot old", "Gallery", "Gallery Photos", "Personal Photos"],
+                "expand_notion_fields" => true,
+                "show_missing_notion_fields" => true,
+                "photo_bridge" => true,
+                "photo_upload" => true,
+                "notion_to_wp" => false,
+                "notion_to_wp_reason" => "Profile photos require media import and avatar assignment; use Use as WP Profile Photo or Upload Profile Photo on this row.",
+            ],
+            [
                 "key" => "display_name",
                 "label" => "Display Name",
                 "wp_field" => "display_name",
@@ -96,16 +116,6 @@ class WordPressUserFieldMap
                 "notion_fields" => ["WordPress Permalink", "Podcast Profile Slug"],
                 "notion_to_wp" => false,
                 "notion_to_wp_reason" => "Author slug changes can affect public URLs and should be handled by a dedicated slug action.",
-            ],
-            [
-                "key" => "avatar_url",
-                "label" => "Profile Photo",
-                "wp_field" => "avatar_url",
-                "wp_type" => "profile_photo",
-                "wp_page" => "profile.php",
-                "notion_fields" => ["Headshot", "Old Headshot", "Headshot PNG", "Personal Photos", "Gallery"],
-                "notion_to_wp" => false,
-                "notion_to_wp_reason" => "Profile photos require media import and avatar assignment; use the photo tool for this row.",
             ],
             [
                 "key" => "avatar_media_id",
