@@ -11,6 +11,21 @@
                                     <span x-text="{!! $linkExpr !!}.field_busy===`load` ? `Loading...` : (fieldBridgeLoaded({!! $linkExpr !!}) ? `Reload fields` : `Load Notion Fields`)"></span>
                                 </button>
                             </div>
+                            <div class="jd-role-editor jd-role-editor-bridge" @click.stop>
+                                <label class="jd-role-field">
+                                    <span class="jd-cu-label">WordPress role</span>
+                                    <select class="jd-cu-input jd-cu-select" x-model="{!! $linkExpr !!}.role" :disabled="{!! $linkExpr !!}.role_busy">
+                                        <template x-for="role in roleOptions" :key="role.value">
+                                            <option :value="role.value" x-text="role.label"></option>
+                                        </template>
+                                    </select>
+                                </label>
+                                <button type="button" class="jd-mini jd-mini-indigo" :disabled="{!! $linkExpr !!}.role_busy" @click.stop="updateWordPressRole({!! $linkExpr !!})">
+                                    <span x-show="{!! $linkExpr !!}.role_busy" class="jd-spin"></span>
+                                    <span x-text="{!! $linkExpr !!}.role_busy ? `Saving role...` : `Save role`"></span>
+                                </button>
+                                <span class="jd-role-status" :class="{!! $linkExpr !!}.role_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.role_message" x-text="{!! $linkExpr !!}.role_message"></span>
+                            </div>
                             <div class="jd-inline-status" x-show="{!! $linkExpr !!}.field_message" :class="{!! $linkExpr !!}.field_error ? `is-error` : ``" x-text="{!! $linkExpr !!}.field_message"></div>
                             <div class="jd-control-reason" x-show="{!! $linkExpr !!}.field_busy" x-text="disabledTitle({!! $linkExpr !!})"></div>
                             <template x-if="fieldBridgeLoaded({!! $linkExpr !!})">
