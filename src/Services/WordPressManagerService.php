@@ -761,16 +761,16 @@ class WordPressManagerService
     {
         $target = $this->normalizeTarget($target);
         if ($this->usesWpToolkit($target)) {
-            if (is_file($filePath) && is_readable($filePath)) {
-                return $this->wpCliUploadReadableLocalMedia($target, $filePath, $fileName, $altText, $caption, $description);
-            }
-
             if ($this->isLocalWhmServerTarget($target)) {
                 $direct = $this->directLocalMediaImport($target, $filePath, $fileName, $altText, $caption, $description);
                 $helperMissing = str_contains((string) ($direct["message"] ?? ""), "helper is not installed");
                 if (($direct["success"] ?? false) === true || (!$helperMissing && !$this->shouldFallbackFromDirectLocalTransportResult($direct))) {
                     return $direct;
                 }
+            }
+
+            if (is_file($filePath) && is_readable($filePath)) {
+                return $this->wpCliUploadReadableLocalMedia($target, $filePath, $fileName, $altText, $caption, $description);
             }
 
             return $this->wptoolkit->wpCliUploadMedia($target["server"], (int) $target["install_id"], $filePath, $fileName, $altText, $caption, $description);
@@ -2321,9 +2321,16 @@ PHP;
             return ["success" => false, "message" => (string) ($result["message"] ?? "WP-CLI local media upload failed."), "data" => null];
         }
 
-        $parsed = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_LOCAL_MEDIA:");
+        $stdout = (string) ($result["stdout"] ?? "");
+        $stderr = (string) ($result["stderr"] ?? "");
+        $parsed = $this->decodeMarkedPayload($stdout, "HEXA_LOCAL_MEDIA:");
         if (!is_array($parsed)) {
-            return ["success" => false, "message" => "WP-CLI local media upload did not return a parseable response.", "data" => null];
+            $raw = trim($stdout . "\n" . $stderr);
+            return [
+                "success" => false,
+                "message" => "WP-CLI local media upload did not return a parseable response: " . substr($raw !== "" ? $raw : "empty output", 0, 700),
+                "data" => ["stdout" => substr($stdout, 0, 2000), "stderr" => substr($stderr, 0, 2000)],
+            ];
         }
 
         if (($parsed["success"] ?? false) !== true) {
