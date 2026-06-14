@@ -134,6 +134,20 @@ class WordPressUserFieldBridgeService
             $canWriteWp = $this->canWriteWordPress($definition, $notionField);
             $canWriteNotion = $this->canWriteNotion($definition, $notionField);
             $baseLabel = (string) ($definition["label"] ?? $key);
+            $sourceTransform = (string) ($definition["source_transform"] ?? "");
+            $wpProposedValue = "";
+            $wpProposalReason = "";
+
+            if ($canWriteWp && $notionValue !== "") {
+                $candidate = $this->transformValueForWordPress($notionValue, $sourceTransform);
+                if ($candidate !== "" && $this->normalizeComparableValue($candidate) !== $this->normalizeComparableValue($wpValue)) {
+                    $wpProposedValue = $candidate;
+                    $sourceLabel = $notionField !== "" ? $notionField : ($notionLabel !== "" ? $notionLabel : "Notion");
+                    $wpProposalReason = $sourceTransform !== ""
+                        ? "Derived from " . $sourceLabel . " using the " . str_replace("_", " ", $sourceTransform) . " transform."
+                        : "Notion and WordPress values differ.";
+                }
+            }
 
             $rows[] = [
                 "key" => $rowKey,
@@ -147,11 +161,14 @@ class WordPressUserFieldBridgeService
                 "wp_type" => (string) ($definition["wp_type"] ?? "native"),
                 "wp_page" => (string) ($definition["wp_page"] ?? "profile.php"),
                 "wp_value" => $wpValue,
+                "wp_proposed_value" => $wpProposedValue,
+                "wp_proposal_reason" => $wpProposalReason,
+                "wp_proposal_target" => $wpProposedValue !== "" ? "wordpress" : "",
                 "can_write_wp" => $canWriteWp,
                 "can_write_notion" => $canWriteNotion,
                 "wp_disabled_reason" => $canWriteWp ? "" : $this->disabledReason($definition, "notion_to_wp", $notionField),
                 "notion_disabled_reason" => $canWriteNotion ? "" : $this->disabledReason($definition, "wp_to_notion", $notionField),
-                "source_transform" => (string) ($definition["source_transform"] ?? ""),
+                "source_transform" => $sourceTransform,
                 "is_photo_bridge" => $isPhotoBridge,
                 "photo_upload" => $isPhotoBridge && (bool) ($definition["photo_upload"] ?? true),
                 "photo_role" => $notionLabel,
@@ -314,6 +331,15 @@ class WordPressUserFieldBridgeService
         }
 
         return "This field direction is not available.";
+    }
+
+    protected function normalizeComparableValue(string $value): string
+    {
+        $value = mb_strtolower(trim($value));
+        $value = preg_replace("/\r\n/u", "\n", $value) ?? $value;
+        $value = preg_replace("/[ \t]+/u", " ", $value) ?? $value;
+
+        return trim($value);
     }
 
     protected function transformValueForWordPress(string $value, string $transform): string

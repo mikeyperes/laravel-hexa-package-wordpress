@@ -26,6 +26,19 @@
                                 </button>
                                 <span class="jd-role-status" :class="{!! $linkExpr !!}.role_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.role_message" x-text="{!! $linkExpr !!}.role_message"></span>
                             </div>
+                            <div class="jd-username-editor" x-show="{!! $linkExpr !!}.wp_user_id" @click.stop data-journalist-username-recreate>
+                                <label class="jd-cu-field">
+                                    <span class="jd-cu-label">WordPress username</span>
+                                    <input class="jd-cu-input" x-model="{!! $linkExpr !!}.username_new" :disabled="{!! $linkExpr !!}.username_busy" @input="{!! $linkExpr !!}.username_message = ``; {!! $linkExpr !!}.username_error = false" autocomplete="off">
+                                </label>
+                                <button type="button" class="jd-mini jd-mini-ghost" :disabled="{!! $linkExpr !!}.username_busy || !linkUsernameSuggestion({!! $linkExpr !!})" @click.stop="applyLinkUsernameSuggestion({!! $linkExpr !!})">Apply suggested</button>
+                                <button type="button" class="jd-mini jd-mini-indigo" :disabled="{!! $linkExpr !!}.username_busy || !linkUsernameChanged({!! $linkExpr !!})" @click.stop="recreateWordPressUsername({!! $linkExpr !!})">
+                                    <span x-show="{!! $linkExpr !!}.username_busy" class="jd-spin"></span>
+                                    <span x-text="{!! $linkExpr !!}.username_busy ? `Replacing...` : `Recreate user with username`"></span>
+                                </button>
+                                <div class="jd-username-help">Suggested username: <strong x-text="linkUsernameSuggestion({!! $linkExpr !!}) || `none`"></strong>. Changing this creates a replacement WordPress user, reassigns content, then deletes the old user.</div>
+                                <div class="jd-username-status" :class="{!! $linkExpr !!}.username_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.username_message" x-text="{!! $linkExpr !!}.username_message"></div>
+                            </div>
                             <div class="jd-inline-status" x-show="{!! $linkExpr !!}.field_message" :class="{!! $linkExpr !!}.field_error ? `is-error` : ``" x-text="{!! $linkExpr !!}.field_message"></div>
                             <div class="jd-control-reason" x-show="{!! $linkExpr !!}.field_busy" x-text="disabledTitle({!! $linkExpr !!})"></div>
                             <template x-if="fieldBridgeLoaded({!! $linkExpr !!})">
@@ -40,15 +53,15 @@
                                         </div>
                                         <div style="display:grid;grid-template-columns:minmax(160px,200px) minmax(0,1fr);gap:14px;align-items:start;">
                                             <div style="border:1px solid #e5e7eb;border-radius:12px;background:#fff;padding:10px;">
-                                                <div style="font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;">On WordPress now</div>
+                                                <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;">On WordPress now</div>
                                                 <div style="height:140px;border-radius:10px;background:#f8fafc;border:1px solid #eef2f7;display:flex;align-items:center;justify-content:center;overflow:hidden;">
                                                     <template x-if="profilePhotoUrl({!! $linkExpr !!})"><img :src="profilePhotoUrl({!! $linkExpr !!})" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;"></template>
-                                                    <template x-if="!profilePhotoUrl({!! $linkExpr !!})"><div style="width:64px;height:64px;border-radius:999px;background:#e0e7ff;color:#3730a3;font-weight:900;font-size:20px;display:flex;align-items:center;justify-content:center;" x-text="profilePhotoInitials({!! $linkExpr !!})"></div></template>
+                                                    <template x-if="!profilePhotoUrl({!! $linkExpr !!})"><div style="width:64px;height:64px;border-radius:999px;background:#e0e7ff;color:#3730a3;font-weight:700;font-size:20px;display:flex;align-items:center;justify-content:center;" x-text="profilePhotoInitials({!! $linkExpr !!})"></div></template>
                                                 </div>
                                                 <div style="margin-top:8px;font-size:11px;color:#64748b;line-height:1.5;"><span x-text="profilePhotoUrl({!! $linkExpr !!}) ? `Profile photo set` : `No profile photo set`"></span><br><span x-text="profilePhotoSource({!! $linkExpr !!})"></span></div>
                                             </div>
                                             <div style="display:flex;flex-direction:column;gap:7px;">
-                                                <div style="font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;">Notion photo sources</div>
+                                                <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;">Notion photo sources</div>
                                                 <template x-for="fieldRow in bridgePhotoRows({!! $linkExpr !!})" :key="fieldRow.key">
                                                     <div style="display:flex;gap:11px;align-items:flex-start;border:1px solid #e5e7eb;border-radius:10px;padding:9px 10px;background:#fff;">
                                                         <div style="width:46px;height:46px;border-radius:8px;background:#f1f5f9;flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center;margin-top:17px;">
@@ -79,7 +92,7 @@
                                             </div>
                                         </div>
                                         <div x-show="photoCandidates({!! $linkExpr !!}).length" style="margin-top:12px;border-top:1px solid #e5e7eb;padding-top:10px;">
-                                            <div style="font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:8px;">Candidates &mdash; pick one for the WordPress profile photo</div>
+                                            <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:8px;">Candidates &mdash; pick one for the WordPress profile photo</div>
                                             <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;">
                                                 <template x-for="candidate in photoCandidates({!! $linkExpr !!})" :key="candidate.key || candidate.url">
                                                     <div style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;background:#fff;display:flex;flex-direction:column;">
@@ -118,6 +131,7 @@
                                                     <div class="jd-sfpf-field-meta">
                                                         <span x-show="fieldMarkedDone(fieldRow)" class="jd-sfpf-pill jd-sfpf-pill-done">Completed</span>
                                                         <span x-show="fieldValuesEquivalent(fieldRow) && !fieldRow.save_status" class="jd-sfpf-pill jd-sfpf-pill-sync">in sync</span>
+                                                        <span x-show="fieldRow.save_status" class="jd-sfpf-pill jd-sfpf-status-pill" :class="fieldSaveStatusClass(fieldRow)"><span x-text="fieldSaveStatusIcon(fieldRow)"></span><span x-text="fieldSaveStatusLabel(fieldRow)"></span></span>
                                                         <span class="jd-sfpf-pill" x-text="fieldRow.wp_type || `native`"></span>
                                                         <button type="button" x-show="!fieldMarkedDone(fieldRow)" class="jd-sfpf-mini jd-sfpf-mini-done" @click.stop="markBridgeFieldDone(fieldRow); open=false" data-sfpf-action="mark-field-completed">Mark completed</button>
                                                         <button type="button" x-show="fieldMarkedDone(fieldRow)" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="unmarkBridgeFieldDone(fieldRow); open=true" data-sfpf-action="reopen-field">Reopen</button>
@@ -153,7 +167,7 @@
                                                             <div x-show="fieldProposedValue(fieldRow)" class="jd-sfpf-proposal" data-sfpf-field-proposal>
                                                                 <div class="jd-sfpf-proposal-top"><span x-text="fieldProposalLabel(fieldRow)"></span><button type="button" @click.stop="denyFieldProposal(fieldRow)" title="Dismiss proposal">×</button></div>
                                                                 <div class="jd-sfpf-proposal-value" x-text="fieldProposedValue(fieldRow)"></div>
-                                                                <div class="jd-sfpf-proposal-why" x-show="fieldRow.ai_rationale" x-text="fieldRow.ai_rationale"></div>
+                                                                <div class="jd-sfpf-proposal-why" x-show="fieldProposalReason(fieldRow)" x-text="fieldProposalReason(fieldRow)"></div>
                                                                 <div class="jd-sfpf-proposal-actions">
                                                                     <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :class="fieldButtonClass({!! $linkExpr !!}, fieldRow, `proposal_approve:wordpress`)" :disabled="fieldRow.save_status === `saving` || !fieldProposedValue(fieldRow)" @click.stop="approveFieldProposal({!! $linkExpr !!}, fieldRow)" data-sfpf-action="approve-field-proposal">Approve</button>
                                                                     <button type="button" class="jd-sfpf-mini jd-sfpf-mini-danger" :disabled="fieldRow.save_status === `saving`" @click.stop="denyFieldProposal(fieldRow)">Deny</button>
