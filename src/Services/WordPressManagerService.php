@@ -921,38 +921,89 @@ class WordPressManagerService
         $before = $this->getUserProfile($target, $userId);
         $previous = (int) (($before["data"]["wp_user_avatar"] ?? $before["data"]["avatar_media_id"] ?? 0));
         $mediaId = $mediaId !== null && $mediaId > 0 ? (int) $mediaId : 0;
-        $command = $mediaId > 0 ? "user meta update " . $userId . " wp_user_avatar " . $mediaId : "user meta delete " . $userId . " wp_user_avatar";
-        $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command);
-        $output = strtolower(trim((string) ($result["stdout"] ?? "") . "\n" . (string) ($result["stderr"] ?? "")));
-        $failed = !($result["success"] ?? false) || str_contains($output, "error") || str_contains($output, "fatal");
+
+        $code = $this->wpCliUserAvatarCode($userId, $mediaId);
+        $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "eval " . escapeshellarg($code));
+        $raw = trim((string) ($result["stdout"] ?? "") . "\n" . (string) ($result["stderr"] ?? ""));
+        $output = strtolower($raw);
+        $failed = !($result["success"] ?? false) || str_contains($output, "error") || str_contains($output, "fatal") || !str_contains($raw, "HEXA_AVATAR:");
 
         if ($failed) {
             return [
                 "success" => false,
-                "message" => trim((string) ($result["stdout"] ?? "") . "\n" . (string) ($result["stderr"] ?? "")) ?: "Profile avatar update failed.",
+                "message" => $raw !== "" ? $raw : "Profile avatar update failed.",
                 "media" => null,
             ];
         }
 
-        if ($mediaId > 0) {
-            $url = $this->wpCliAttachmentUrl($target, $mediaId);
-            $payload = serialize(["media_id" => $mediaId, "site_id" => 1, "full" => $url, 96 => $url]);
-            $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta update " . $userId . " wp_user_avatars " . escapeshellarg($payload));
-        } else {
-            $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta delete " . $userId . " wp_user_avatars");
+        $payloadRaw = substr($raw, strrpos($raw, "HEXA_AVATAR:") + strlen("HEXA_AVATAR:"));
+        $payload = json_decode(trim($payloadRaw), true);
+        if (!is_array($payload) || !($payload["success"] ?? false)) {
+            return [
+                "success" => false,
+                "message" => is_array($payload) ? (string) ($payload["message"] ?? "Profile avatar update failed.") : "Profile avatar update returned an invalid response.",
+                "media" => null,
+            ];
         }
 
         if ($deletePreviousMedia && $previous > 0 && $previous !== $mediaId) {
             $this->deleteMedia($target, $previous, true);
         }
 
-        $profile = $this->getUserProfile($target, $userId);
+        $profile = $this->getUserProfile($target, $userId, true);
 
         return [
             "success" => true,
-            "message" => $mediaId > 0 ? "Profile avatar updated via WP Toolkit." : "Profile avatar cleared via WP Toolkit.",
-            "media" => ["media_id" => $mediaId, "avatar_url" => (string) ($profile["data"]["avatar_url"] ?? "")],
+            "message" => $mediaId > 0 ? "Profile avatar updated via WP User Avatars." : "Profile avatar cleared via WP User Avatars.",
+            "media" => [
+                "media_id" => $mediaId,
+                "avatar_url" => (string) ($profile["data"]["avatar_url"] ?? $payload["avatar_url"] ?? ""),
+                "storage" => (string) ($payload["storage"] ?? ""),
+            ],
         ];
+    }
+
+    private function wpCliUserAvatarCode(int $userId, int $mediaId): string
+    {
+        $code = <<<PHP
+\$userId = __USER_ID__;
+\$mediaId = __MEDIA_ID__;
+if (\$userId <= 0) {
+    echo "HEXA_AVATAR:" . wp_json_encode(["success" => false, "message" => "User ID is required."]);
+    return;
+}
+if (\$mediaId > 0) {
+    if (!wp_attachment_is_image(\$mediaId)) {
+        echo "HEXA_AVATAR:" . wp_json_encode(["success" => false, "message" => "Media is not a WordPress image attachment."]);
+        return;
+    }
+    update_user_meta(\$userId, "wp_user_avatar", \$mediaId);
+    if (function_exists("wp_user_avatars_update_avatar")) {
+        wp_user_avatars_update_avatar(\$userId, \$mediaId);
+    } else {
+        \$url = (string) wp_get_attachment_url(\$mediaId);
+        update_user_meta(\$userId, "wp_user_avatars", ["media_id" => \$mediaId, "site_id" => get_current_blog_id(), "full" => \$url]);
+    }
+    update_user_meta(\$userId, "wp_user_avatars_rating", "G");
+    \$avatars = get_user_meta(\$userId, "wp_user_avatars", true);
+    \$url = is_array(\$avatars) ? (string) (\$avatars["full"] ?? "") : "";
+    if (\$url === "") {
+        \$url = (string) wp_get_attachment_url(\$mediaId);
+    }
+    echo "HEXA_AVATAR:" . wp_json_encode(["success" => true, "media_id" => \$mediaId, "avatar_url" => \$url, "storage" => is_array(\$avatars) ? "array" : gettype(\$avatars)]);
+    return;
+}
+delete_user_meta(\$userId, "wp_user_avatar");
+if (function_exists("wp_user_avatars_delete_avatar")) {
+    wp_user_avatars_delete_avatar(\$userId);
+} else {
+    delete_user_meta(\$userId, "wp_user_avatars");
+    delete_user_meta(\$userId, "wp_user_avatars_rating");
+}
+echo "HEXA_AVATAR:" . wp_json_encode(["success" => true, "media_id" => 0, "avatar_url" => "", "storage" => "deleted"]);
+PHP;
+
+        return str_replace(["__USER_ID__", "__MEDIA_ID__"], [(string) $userId, (string) $mediaId], $code);
     }
 
     public function updateNativeField(array $target, string $objectType, int $objectId, string $field, string $value): array
