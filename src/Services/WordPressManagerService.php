@@ -320,7 +320,7 @@ class WordPressManagerService
         $response = $this->restRequest($target, "get", "users", [], [
             "per_page" => 100,
             "context" => "edit",
-            "_fields" => "id,name,slug,email,roles",
+            "_fields" => "id,name,slug,email,url,roles",
         ]);
 
         if (!($response["success"] ?? false)) {
@@ -1690,6 +1690,8 @@ PHP;
             "user_login" => (string) ($user["user_login"] ?? $user["slug"] ?? ""),
             "display_name" => (string) ($user["display_name"] ?? $user["name"] ?? ""),
             "user_email" => (string) ($user["user_email"] ?? $user["email"] ?? ""),
+            "user_url" => (string) ($user["user_url"] ?? $user["url"] ?? ""),
+            "url" => (string) ($user["url"] ?? $user["user_url"] ?? ""),
             "roles" => array_values(array_map("strval", (array) ($user["roles"] ?? []))),
         ];
     }
@@ -2051,13 +2053,13 @@ PHP;
 
         if ($this->usesWpToolkit($target)) {
             $parts = [
-                '$args=["fields"=>["ID","display_name","user_login","user_email","roles"]];',
+                '$args=["fields"=>["ID","display_name","user_login","user_email","user_url","roles"]];',
                 'if (' . var_export($filters["role"] !== "", true) . ') { $args["role"]=' . var_export($filters["role"], true) . '; }',
                 'if (' . var_export($filters["search"] !== "", true) . ') { $args["search"]=' . var_export($filters["search"] !== "" ? ("*" . $filters["search"] . "*") : "", true) . '; $args["search_columns"]=["user_login","user_email","display_name"]; }',
                 'if (' . var_export($filters["include"] !== [], true) . ') { $args["include"]=' . var_export($filters["include"], true) . '; }',
                 '$users=get_users($args);',
                 '$rows=[];',
-                'foreach ($users as $user) { $rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"roles"=>array_values(array_map("strval", (array) $user->roles))]; }',
+                'foreach ($users as $user) { $rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"user_url"=>(string) $user->user_url,"url"=>(string) $user->user_url,"roles"=>array_values(array_map("strval", (array) $user->roles))]; }',
                 'echo "HEXA_USER_LIST:" . wp_json_encode($rows);',
             ];
             $eval = $this->evaluatePhp($target, implode("", $parts));
@@ -2075,7 +2077,7 @@ PHP;
         $query = [
             "per_page" => $filters["per_page"],
             "context" => "edit",
-            "_fields" => "id,name,slug,email,roles",
+            "_fields" => "id,name,slug,email,url,roles",
         ];
         if ($filters["role"] !== "") {
             $query["roles"] = $filters["role"];
