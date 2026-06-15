@@ -97,8 +97,7 @@
                                                     </div>
                                                 </div>
                                                 <div class="jd-sfpf-field-meta">
-                                                    <span x-show="{!! $linkExpr !!}.role_message" class="jd-sfpf-pill jd-sfpf-status-pill" :class="{!! $linkExpr !!}.role_error ? `is-error` : ``"><span x-text="{!! $linkExpr !!}.role_error ? `×` : `✓`"></span><span x-text="{!! $linkExpr !!}.role_error ? `Failed` : `Saved`"></span></span>
-                                                    <span class="jd-sfpf-pill">account</span>
+                                                    <span x-show="{!! $linkExpr !!}.role_busy || {!! $linkExpr !!}.role_message" class="jd-sfpf-pill jd-sfpf-status-pill" :class="{!! $linkExpr !!}.role_busy ? `is-saving` : ({!! $linkExpr !!}.role_error ? `is-error` : `is-success`)"><span x-show="{!! $linkExpr !!}.role_busy" class="jd-spin jd-spin-dark"></span><span x-show="!{!! $linkExpr !!}.role_busy" x-text="{!! $linkExpr !!}.role_error ? `×` : `✓`"></span><span x-text="{!! $linkExpr !!}.role_busy ? `Saving` : ({!! $linkExpr !!}.role_error ? `Failed` : `Saved`)"></span></span>
                                                     <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="open = !open" :aria-expanded="open ? `true` : `false`" x-text="open ? `Collapse` : `Expand`"></button>
                                                 </div>
                                             </div>
@@ -116,13 +115,19 @@
                                                     <div class="jd-sfpf-arrow">→</div>
                                                     <div class="jd-sfpf-side jd-sfpf-side-wp">
                                                         <div class="jd-sfpf-side-label"><span>WORDPRESS</span><b>role</b></div>
-                                                        <select class="jd-cu-input jd-cu-select" x-model="{!! $linkExpr !!}.role" :disabled="{!! $linkExpr !!}.role_busy">
-                                                            <template x-for="role in roleOptions" :key="role.value">
-                                                                <option :value="role.value" x-text="role.label"></option>
-                                                            </template>
+                                                        <select class="jd-cu-input jd-cu-select" x-model="{!! $linkExpr !!}.role" x-effect="$nextTick(() => { $el.value = {!! $linkExpr !!}.role || {!! $linkExpr !!}.role_current || `contributor`; })" :disabled="{!! $linkExpr !!}.role_busy" @change="{!! $linkExpr !!}.role_message = ``; {!! $linkExpr !!}.role_error = false">
+                                                            <option value="administrator">Administrator</option>
+                                                            <option value="editor">Editor</option>
+                                                            <option value="author">Author</option>
+                                                            <option value="contributor">Contributor</option>
+                                                            <option value="subscriber">Subscriber</option>
                                                         </select>
+                                                        <div style="margin-top:8px;font-size:11px;color:#64748b;line-height:1.5;">
+                                                            <span>Current WordPress role: </span><strong style="color:#334155;" x-text="roleDisplayLabel({!! $linkExpr !!}.role_current || {!! $linkExpr !!}.role)"></strong>
+                                                            <span x-show="roleChanged({!! $linkExpr !!})"> · Selected change: <strong style="color:#3730a3;" x-text="roleDisplayLabel({!! $linkExpr !!}.role)"></strong></span>
+                                                        </div>
                                                         <div class="jd-sfpf-side-actions">
-                                                            <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :disabled="{!! $linkExpr !!}.role_busy" @click.stop="updateWordPressRole({!! $linkExpr !!})">
+                                                            <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :disabled="{!! $linkExpr !!}.role_busy || !roleChanged({!! $linkExpr !!})" @click.stop="updateWordPressRole({!! $linkExpr !!})" :title="roleChanged({!! $linkExpr !!}) ? `Save the selected WordPress role` : `The selected role is already current`">
                                                                 <span x-show="{!! $linkExpr !!}.role_busy" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.role_busy ? `Saving role...` : `Save role`"></span>
                                                             </button>
                                                         </div>
@@ -141,7 +146,6 @@
                                                 </div>
                                                 <div class="jd-sfpf-field-meta">
                                                     <span x-show="{!! $linkExpr !!}.username_message" class="jd-sfpf-pill jd-sfpf-status-pill" :class="{!! $linkExpr !!}.username_error ? `is-error` : ``"><span x-text="{!! $linkExpr !!}.username_error ? `×` : `✓`"></span><span x-text="{!! $linkExpr !!}.username_error ? `Failed` : `Saved`"></span></span>
-                                                    <span class="jd-sfpf-pill">account</span>
                                                     <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="open = !open" :aria-expanded="open ? `true` : `false`" x-text="open ? `Collapse` : `Expand`"></button>
                                                 </div>
                                             </div>
@@ -187,7 +191,6 @@
                                                         <button type="button" x-show="fieldMarkedDone(fieldRow)" class="jd-sfpf-pill jd-sfpf-pill-done" title="Move this field back to review" @click.stop="unmarkBridgeFieldDone(fieldRow); open=true" data-sfpf-action="reopen-field">Completed <span class="jd-sfpf-pill-done-x" aria-hidden="true">&times;</span></button>
                                                         <span x-show="fieldValuesEquivalent(fieldRow) && !fieldRow.save_status" class="jd-sfpf-pill jd-sfpf-pill-sync">in sync</span>
                                                         <span x-show="fieldRow.save_status" class="jd-sfpf-pill jd-sfpf-status-pill" :class="fieldSaveStatusClass(fieldRow)"><span class="jd-spin jd-spin-dark" x-show="fieldRow.save_status === `saving`"></span><span x-show="fieldRow.save_status !== `saving`" x-text="fieldSaveStatusIcon(fieldRow)"></span><span x-text="fieldSaveStatusLabel(fieldRow)"></span></span>
-                                                        <span class="jd-sfpf-pill" x-text="fieldRow.wp_type || `native`"></span>
                                                         <button type="button" x-show="!fieldMarkedDone(fieldRow)" class="jd-sfpf-mini jd-sfpf-mini-done" @click.stop="markBridgeFieldDone(fieldRow); open=false" data-sfpf-action="mark-field-completed">Mark completed</button>
                                                         <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="open = !open" :aria-expanded="open ? `true` : `false`" x-text="open ? `Collapse` : `Expand`"></button>
                                                     </div>
