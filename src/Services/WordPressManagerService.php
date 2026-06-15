@@ -1008,9 +1008,19 @@ class WordPressManagerService
             ];
         }
 
-        $payload = $allowed[$field] === "user_email" ? ["email" => $value] : ["meta" => [$field => $value]];
-        if ($field === "display_name") {
+        if ($allowed[$field] === "user_email") {
+            $payload = ["email" => $value];
+        } elseif ($field === "display_name") {
             $payload = ["name" => $value];
+        } else {
+            $restUserFields = [
+                "first_name" => "first_name",
+                "last_name" => "last_name",
+                "description" => "description",
+                "nickname" => "nickname",
+                "user_url" => "url",
+            ];
+            $payload = isset($restUserFields[$field]) ? [$restUserFields[$field] => $value] : ["meta" => [$field => $value]];
         }
 
         $response = $this->restRequest($target, "post", "users/" . $objectId, $payload);
