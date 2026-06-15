@@ -266,6 +266,7 @@ class WordPressUserFieldMap
                 "wp_type" => "usermeta",
                 "wp_page" => "profile.php",
                 "notion_fields" => ["Verified Profiles", "Status"],
+                "source_transform" => "verified_boolean",
             ],
         ], $overrides);
     }

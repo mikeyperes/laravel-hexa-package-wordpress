@@ -11,6 +11,10 @@
                                     <span x-text="{!! $linkExpr !!}.field_busy===`load` ? `Loading...` : (fieldBridgeLoaded({!! $linkExpr !!}) ? `Reload fields` : `Load Notion Fields`)"></span>
                                 </button>
                             </div>
+                            <div class="jd-inline-status" x-show="{!! $linkExpr !!}.field_message" :class="{!! $linkExpr !!}.field_error ? `is-error` : ``" x-text="{!! $linkExpr !!}.field_message"></div>
+                            <div class="jd-control-reason" x-show="{!! $linkExpr !!}.field_busy" x-text="disabledTitle({!! $linkExpr !!})"></div>
+                            <template x-if="fieldBridgeLoaded({!! $linkExpr !!})">
+                                <div class="jd-sfpf-workspace">
                             <div class="jd-role-editor jd-role-editor-bridge" @click.stop>
                                 <label class="jd-role-field">
                                     <span class="jd-cu-label">WordPress role</span>
@@ -39,10 +43,6 @@
                                 <div class="jd-username-help">Suggested username: <strong x-text="linkUsernameSuggestion({!! $linkExpr !!}) || `none`"></strong>. Changing this creates a replacement WordPress user, reassigns content, then deletes the old user.</div>
                                 <div class="jd-username-status" :class="{!! $linkExpr !!}.username_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.username_message" x-text="{!! $linkExpr !!}.username_message"></div>
                             </div>
-                            <div class="jd-inline-status" x-show="{!! $linkExpr !!}.field_message" :class="{!! $linkExpr !!}.field_error ? `is-error` : ``" x-text="{!! $linkExpr !!}.field_message"></div>
-                            <div class="jd-control-reason" x-show="{!! $linkExpr !!}.field_busy" x-text="disabledTitle({!! $linkExpr !!})"></div>
-                            <template x-if="fieldBridgeLoaded({!! $linkExpr !!})">
-                                <div class="jd-sfpf-workspace">
                                     <div class="jd-profile-photo-card jd-bridge-profile-photo-card" x-show="bridgePhotoRows({!! $linkExpr !!}).length" x-init="$nextTick(() => { if(!{!! $linkExpr !!}.photo_scanned_once && bridgePhotoRows({!! $linkExpr !!}).length){ {!! $linkExpr !!}.photo_scanned_once = true; scanPhotos({!! $linkExpr !!}); } })" data-journalist-profile-photo-bridge>
                                         <div class="jd-profile-photo-head">
                                             <div><div class="jd-profile-photo-title">Profile photo</div><div class="jd-profile-photo-note">Edit the Notion photo sources, paste image or Drive URLs, then pick any image to set the WordPress profile photo. Drive folders load into the candidate gallery on Scan.</div></div>
@@ -119,7 +119,7 @@
                                     </div>
                                     <div class="jd-sfpf-field-list">
                                         <template x-for="fieldRow in bridgeVisibleRows({!! $linkExpr !!}).filter(r => !r.is_photo_bridge)" :key="fieldRow.key">
-                                            <div class="jd-sfpf-field" :class="fieldCardClass(fieldRow)" x-data="{ open: !fieldMarkedDone(fieldRow) }" x-effect="if(fieldMarkedDone(fieldRow)){ open=false }">
+                                            <div class="jd-sfpf-field" :class="fieldCardClass(fieldRow)" x-data="{ open: !fieldMarkedDone(fieldRow) }" x-effect="if(fieldMarkedDone(fieldRow)){ open=false } else if(fieldRow.save_status === `error`){ open=true }">
                                                 <div class="jd-sfpf-field-head">
                                                     <div class="jd-sfpf-field-title-block">
                                                         <span x-show="fieldMarkedDone(fieldRow)" class="jd-sfpf-done-icon">✓</span>
@@ -129,12 +129,11 @@
                                                         </div>
                                                     </div>
                                                     <div class="jd-sfpf-field-meta">
-                                                        <span x-show="fieldMarkedDone(fieldRow)" class="jd-sfpf-pill jd-sfpf-pill-done">Completed</span>
+                                                        <button type="button" x-show="fieldMarkedDone(fieldRow)" class="jd-sfpf-pill jd-sfpf-pill-done" title="Move this field back to review" @click.stop="unmarkBridgeFieldDone(fieldRow); open=true" data-sfpf-action="reopen-field">Completed <span class="jd-sfpf-pill-done-x" aria-hidden="true">&times;</span></button>
                                                         <span x-show="fieldValuesEquivalent(fieldRow) && !fieldRow.save_status" class="jd-sfpf-pill jd-sfpf-pill-sync">in sync</span>
                                                         <span x-show="fieldRow.save_status" class="jd-sfpf-pill jd-sfpf-status-pill" :class="fieldSaveStatusClass(fieldRow)"><span x-text="fieldSaveStatusIcon(fieldRow)"></span><span x-text="fieldSaveStatusLabel(fieldRow)"></span></span>
                                                         <span class="jd-sfpf-pill" x-text="fieldRow.wp_type || `native`"></span>
                                                         <button type="button" x-show="!fieldMarkedDone(fieldRow)" class="jd-sfpf-mini jd-sfpf-mini-done" @click.stop="markBridgeFieldDone(fieldRow); open=false" data-sfpf-action="mark-field-completed">Mark completed</button>
-                                                        <button type="button" x-show="fieldMarkedDone(fieldRow)" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="unmarkBridgeFieldDone(fieldRow); open=true" data-sfpf-action="reopen-field">Reopen</button>
                                                         <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="open = !open" :aria-expanded="open ? `true` : `false`" x-text="open ? `Collapse` : `Expand`"></button>
                                                     </div>
                                                 </div>
@@ -142,6 +141,19 @@
                                                     <div><b x-text="fieldRow.label"></b><span x-text="` · ` + (fieldRow.wp_field || `WordPress field`)"></span></div>
                                                     <div><b>Notion:</b> <span x-text="(fieldRow.notion_field || `—`) + ` = ` + fieldValuePreview(fieldRow.notion_value)"></span></div>
                                                     <div><b>WordPress:</b> <span x-text="(fieldRow.wp_field || `—`) + ` = ` + fieldValuePreview(fieldRow.wp_value)"></span></div>
+                                                    <div x-show="fieldRow.save_status || fieldRow.save_message" x-cloak class="jd-sfpf-collapsed-live" :class="fieldRow.save_status || ``">
+                                                        <span x-show="fieldRow.save_status === `saving`" class="jd-spin jd-spin-dark"></span>
+                                                        <span x-show="fieldRow.save_status === `error`" class="jd-field-save-x">&#10005;</span>
+                                                        <span x-show="fieldRow.save_status && fieldRow.save_status !== `saving` && fieldRow.save_status !== `error`" class="jd-field-save-ok">&#10003;</span>
+                                                        <b x-text="fieldSaveStatusLabel(fieldRow) || `Status`"></b>
+                                                        <span x-text="fieldRow.save_message || (fieldRow.save_status === `saving` ? `Saving...` : (fieldRow.save_status === `error` ? `Failed` : `Saved`))"></span>
+                                                    </div>
+                                                    <template x-if="latestFieldActivity({!! $linkExpr !!}, fieldRow)">
+                                                        <div class="jd-sfpf-collapsed-activity" :class="`is-${latestFieldActivity({!! $linkExpr !!}, fieldRow).type}`">
+                                                            <span class="jd-activity-dot"></span>
+                                                            <span x-text="latestFieldActivity({!! $linkExpr !!}, fieldRow).message"></span>
+                                                        </div>
+                                                    </template>
                                                 </div>
                                                 <div x-show="open" x-cloak class="jd-sfpf-field-body">
                                                     <div class="jd-sfpf-field-row">
@@ -169,8 +181,8 @@
                                                                 <div class="jd-sfpf-proposal-value" x-text="fieldProposedValue(fieldRow)"></div>
                                                                 <div class="jd-sfpf-proposal-why" x-show="fieldProposalReason(fieldRow)" x-text="fieldProposalReason(fieldRow)"></div>
                                                                 <div class="jd-sfpf-proposal-actions">
-                                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :class="fieldButtonClass({!! $linkExpr !!}, fieldRow, `proposal_approve:wordpress`)" :disabled="fieldRow.save_status === `saving` || !fieldProposedValue(fieldRow)" @click.stop="approveFieldProposal({!! $linkExpr !!}, fieldRow)" data-sfpf-action="approve-field-proposal">Approve</button>
-                                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-danger" :disabled="fieldRow.save_status === `saving`" @click.stop="denyFieldProposal(fieldRow)">Deny</button>
+                                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :class="fieldButtonClass({!! $linkExpr !!}, fieldRow, `proposal_approve:wordpress`)" :disabled="fieldTargetBusy({!! $linkExpr !!}, fieldRow, `wordpress`) || !fieldProposedValue(fieldRow)" @click.stop="approveFieldProposal({!! $linkExpr !!}, fieldRow)" data-sfpf-action="approve-field-proposal">Approve</button>
+                                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-danger" :disabled="fieldTargetBusy({!! $linkExpr !!}, fieldRow, `wordpress`)" @click.stop="denyFieldProposal(fieldRow)">Deny</button>
                                                                 </div>
                                                             </div>
                                                             <div class="jd-sfpf-side-actions">

@@ -44,7 +44,7 @@ class WordPressUserFieldBridgeService
                 continue;
             }
 
-            foreach ($this->rowsForDefinition($properties, $wpData, $definition, $key, $wpField) as $row) {
+            foreach ($this->rowsForDefinition($properties, $wpData, $definition, $key, $wpField, $context) as $row) {
                 $rows[] = $row;
             }
         }
@@ -81,6 +81,10 @@ class WordPressUserFieldBridgeService
             return ["success" => false, "message" => "Unknown user field bridge row."];
         }
 
+        $verifiedWpKey = "";
+        $verifiedWpLabel = "";
+        $verifiedWpValue = null;
+
         if ($direction === "notion_to_wp") {
             if (!($row["can_write_wp"] ?? false)) {
                 return ["success" => false, "message" => (string) ($row["wp_disabled_reason"] ?? "This WordPress field cannot be written from Notion.")];
@@ -92,6 +96,10 @@ class WordPressUserFieldBridgeService
             if (!($result["success"] ?? false)) {
                 return ["success" => false, "message" => $result["message"] ?? "WordPress field update failed."];
             }
+
+            $verifiedWpKey = (string) ($row["key"] ?? $key);
+            $verifiedWpLabel = (string) ($row["label"] ?? $key);
+            $verifiedWpValue = $value;
         } elseif ($direction === "wp_to_notion") {
             if (!($row["can_write_notion"] ?? false)) {
                 return ["success" => false, "message" => (string) ($row["notion_disabled_reason"] ?? "This Notion field cannot be written from WordPress.")];
@@ -107,6 +115,24 @@ class WordPressUserFieldBridgeService
         }
 
         $fresh = $this->payload($target, $userId, $notionPageId, $fields, $context);
+        if ($verifiedWpKey !== "" && ($fresh["success"] ?? false)) {
+            $verifiedRow = null;
+            foreach ((array) ($fresh["rows"] ?? []) as $candidate) {
+                if (is_array($candidate) && (string) ($candidate["key"] ?? "") === $verifiedWpKey) {
+                    $verifiedRow = $candidate;
+                    break;
+                }
+            }
+
+            $actualValue = is_array($verifiedRow) ? (string) ($verifiedRow["wp_value"] ?? "") : "";
+            $expectedValue = (string) $verifiedWpValue;
+            if (!$verifiedRow || $this->normalizeComparableValue($actualValue) !== $this->normalizeComparableValue($expectedValue)) {
+                $fresh["success"] = false;
+                $fresh["message"] = "WordPress write did not verify for " . $verifiedWpLabel . ". Expected " . $this->valuePreview($expectedValue) . "; read back " . $this->valuePreview($actualValue) . ".";
+                return $fresh;
+            }
+        }
+
         $fresh["message"] = "Field value pushed.";
 
         return $fresh;
@@ -118,7 +144,7 @@ class WordPressUserFieldBridgeService
      * @param array<string, mixed> $definition
      * @return array<int, array<string, mixed>>
      */
-    protected function rowsForDefinition(array $properties, array $wpData, array $definition, string $key, string $wpField): array
+    protected function rowsForDefinition(array $properties, array $wpData, array $definition, string $key, string $wpField, array $context = []): array
     {
         $wpValue = $this->readWordPressValue($wpData, $definition);
         $targets = $this->expandedNotionTargets($properties, $definition);
@@ -138,7 +164,15 @@ class WordPressUserFieldBridgeService
             $wpProposedValue = "";
             $wpProposalReason = "";
 
-            if ($canWriteWp && $notionValue !== "") {
+            if ($canWriteWp && $wpField === "user_email" && trim($wpValue) === "") {
+                $candidate = $this->suggestedPublicationEmail($properties, $context);
+                if ($candidate !== "") {
+                    $wpProposedValue = $candidate;
+                    $wpProposalReason = "Suggested from the journalist name and publication domain because the WordPress email is empty.";
+                }
+            }
+
+            if ($canWriteWp && $wpProposedValue === "" && $notionValue !== "") {
                 $candidate = $this->transformValueForWordPress($notionValue, $sourceTransform);
                 if ($candidate !== "" && $this->normalizeComparableValue($candidate) !== $this->normalizeComparableValue($wpValue)) {
                     $wpProposedValue = $candidate;
@@ -333,6 +367,54 @@ class WordPressUserFieldBridgeService
         return "This field direction is not available.";
     }
 
+
+    /**
+     * @param array<string, mixed> $properties
+     * @param array<string, mixed> $context
+     */
+    protected function suggestedPublicationEmail(array $properties, array $context): string
+    {
+        $domain = trim((string) ($context["publication_domain"] ?? ""));
+        if ($domain === "") {
+            $url = trim((string) ($context["publication_url"] ?? ""));
+            $domain = (string) (parse_url($url, PHP_URL_HOST) ?: $url);
+        }
+
+        $domain = preg_replace("/^www\./i", "", trim($domain)) ?: "";
+        $domain = mb_strtolower($domain);
+        $domain = preg_replace("/[^a-z0-9.-]+/", "", $domain) ?: "";
+        if ($domain === "" || !str_contains($domain, ".")) {
+            return "";
+        }
+
+        $nameField = $this->firstExistingField($properties, ["Full Name", "Name"]);
+        $name = $nameField !== "" ? $this->stringValue($properties[$nameField] ?? "") : "";
+        if ($name === "") {
+            $name = trim((string) ($context["profile_name"] ?? ""));
+        }
+
+        [$first, $last] = $this->splitName($name);
+        $first = $this->emailNameSegment($first);
+        $last = $this->emailNameSegment($last);
+        if ($first === "") {
+            return "";
+        }
+
+        return ($last !== "" ? $first . "." . $last : $first) . "@" . $domain;
+    }
+
+    protected function emailNameSegment(string $value): string
+    {
+        $value = mb_strtolower(trim($value));
+        $ascii = iconv("UTF-8", "ASCII//TRANSLIT//IGNORE", $value);
+        if (is_string($ascii) && $ascii !== "") {
+            $value = $ascii;
+        }
+
+        $value = preg_replace("/[^a-z0-9]+/", ".", $value) ?: "";
+        return trim($value, ".");
+    }
+
     protected function normalizeComparableValue(string $value): string
     {
         $value = mb_strtolower(trim($value));
@@ -340,6 +422,16 @@ class WordPressUserFieldBridgeService
         $value = preg_replace("/[ \t]+/u", " ", $value) ?? $value;
 
         return trim($value);
+    }
+
+    protected function valuePreview(string $value): string
+    {
+        $value = trim((string) (preg_replace("/\s+/u", " ", $value) ?? $value));
+        if ($value === "") {
+            return "Empty";
+        }
+
+        return mb_strlen($value) > 90 ? mb_substr($value, 0, 90) . "..." : $value;
     }
 
     protected function transformValueForWordPress(string $value, string $transform): string
@@ -353,7 +445,30 @@ class WordPressUserFieldBridgeService
             return $this->splitName($value)[1];
         }
 
+        if ($transform === "verified_boolean") {
+            return $this->verifiedBooleanValue($value);
+        }
+
         return $value;
+    }
+
+    protected function verifiedBooleanValue(string $value): string
+    {
+        $normalized = mb_strtolower(trim($value));
+        if ($normalized === "") {
+            return "0";
+        }
+
+        $negativeValues = ["0", "false", "no", "none", "n/a", "na", "not verified", "unverified"];
+        if (in_array($normalized, $negativeValues, true)) {
+            return "0";
+        }
+
+        if (preg_match("/\b(unverified|not\s+verified|false|none|n\/?a)\b/u", $normalized)) {
+            return "0";
+        }
+
+        return "1";
     }
 
     /**
