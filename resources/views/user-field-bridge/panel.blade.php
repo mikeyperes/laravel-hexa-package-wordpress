@@ -8,41 +8,13 @@
                                 </div>
                                 <button type="button" class="jd-mini jd-mini-indigo" :disabled="{!! $linkExpr !!}.field_busy" :title="{!! $linkExpr !!}.field_busy ? disabledTitle({!! $linkExpr !!}) : `Load Notion fields for this mapped journalist`" @click.stop="loadFieldBridge({!! $linkExpr !!})" data-sfpf-action="load-journalist-field-bridge">
                                     <span x-show="{!! $linkExpr !!}.field_busy===`load`" class="jd-spin"></span>
-                                    <span x-text="{!! $linkExpr !!}.field_busy===`load` ? `Loading...` : (fieldBridgeLoaded({!! $linkExpr !!}) ? `Reload fields` : `Load Notion Fields`)"></span>
+                                    <span x-text="{!! $linkExpr !!}.field_busy===`load` ? `Loading` : (fieldBridgeLoaded({!! $linkExpr !!}) ? `Reload fields` : `Load Notion Fields`)"></span>
                                 </button>
                             </div>
                             <div class="jd-inline-status" x-show="{!! $linkExpr !!}.field_message" :class="{!! $linkExpr !!}.field_error ? `is-error` : ``" x-text="{!! $linkExpr !!}.field_message"></div>
                             <div class="jd-control-reason" x-show="{!! $linkExpr !!}.field_busy" x-text="disabledTitle({!! $linkExpr !!})"></div>
-                            <template x-if="fieldBridgeLoaded({!! $linkExpr !!})">
+                            <template x-if="fieldBridgeLoaded({!! $linkExpr !!}) && {!! $linkExpr !!}.field_busy !== &quot;load&quot;">
                                 <div class="jd-sfpf-workspace">
-                            <div class="jd-role-editor jd-role-editor-bridge" @click.stop>
-                                <label class="jd-role-field">
-                                    <span class="jd-cu-label">WordPress role</span>
-                                    <select class="jd-cu-input jd-cu-select" x-model="{!! $linkExpr !!}.role" :disabled="{!! $linkExpr !!}.role_busy">
-                                        <template x-for="role in roleOptions" :key="role.value">
-                                            <option :value="role.value" x-text="role.label"></option>
-                                        </template>
-                                    </select>
-                                </label>
-                                <button type="button" class="jd-mini jd-mini-indigo" :disabled="{!! $linkExpr !!}.role_busy" @click.stop="updateWordPressRole({!! $linkExpr !!})">
-                                    <span x-show="{!! $linkExpr !!}.role_busy" class="jd-spin"></span>
-                                    <span x-text="{!! $linkExpr !!}.role_busy ? `Saving role...` : `Save role`"></span>
-                                </button>
-                                <span class="jd-role-status" :class="{!! $linkExpr !!}.role_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.role_message" x-text="{!! $linkExpr !!}.role_message"></span>
-                            </div>
-                            <div class="jd-username-editor" x-show="{!! $linkExpr !!}.wp_user_id" @click.stop data-journalist-username-recreate>
-                                <label class="jd-cu-field">
-                                    <span class="jd-cu-label">WordPress username</span>
-                                    <input class="jd-cu-input" x-model="{!! $linkExpr !!}.username_new" :disabled="{!! $linkExpr !!}.username_busy" @input="{!! $linkExpr !!}.username_message = ``; {!! $linkExpr !!}.username_error = false" autocomplete="off">
-                                </label>
-                                <button type="button" class="jd-mini jd-mini-ghost" :disabled="{!! $linkExpr !!}.username_busy || !linkUsernameSuggestion({!! $linkExpr !!})" @click.stop="applyLinkUsernameSuggestion({!! $linkExpr !!})">Apply suggested</button>
-                                <button type="button" class="jd-mini jd-mini-indigo" :disabled="{!! $linkExpr !!}.username_busy || !linkUsernameChanged({!! $linkExpr !!})" @click.stop="recreateWordPressUsername({!! $linkExpr !!})">
-                                    <span x-show="{!! $linkExpr !!}.username_busy" class="jd-spin"></span>
-                                    <span x-text="{!! $linkExpr !!}.username_busy ? `Replacing...` : `Recreate user with username`"></span>
-                                </button>
-                                <div class="jd-username-help">Suggested username: <strong x-text="linkUsernameSuggestion({!! $linkExpr !!}) || `none`"></strong>. Changing this creates a replacement WordPress user, reassigns content, then deletes the old user.</div>
-                                <div class="jd-username-status" :class="{!! $linkExpr !!}.username_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.username_message" x-text="{!! $linkExpr !!}.username_message"></div>
-                            </div>
                                     <div class="jd-profile-photo-card jd-bridge-profile-photo-card" x-show="bridgePhotoRows({!! $linkExpr !!}).length" x-init="$nextTick(() => { if(!{!! $linkExpr !!}.photo_scanned_once && bridgePhotoRows({!! $linkExpr !!}).length){ {!! $linkExpr !!}.photo_scanned_once = true; scanPhotos({!! $linkExpr !!}); } })" data-journalist-profile-photo-bridge>
                                         <div class="jd-profile-photo-head">
                                             <div><div class="jd-profile-photo-title">Profile photo</div><div class="jd-profile-photo-note">Edit the Notion photo sources, paste image or Drive URLs, then pick any image to set the WordPress profile photo. Drive folders load into the candidate gallery on Scan.</div></div>
@@ -76,7 +48,7 @@
                                                             </template>
                                                             <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
                                                                 <button type="button" class="jd-mini jd-mini-ghost" :disabled="{!! $linkExpr !!}.photo_busy" @click.stop="saveBridgeField({!! $linkExpr !!}, fieldRow, `notion`)" title="Save this value back to the Notion field"><span x-show="fieldButtonStatus({!! $linkExpr !!}, fieldRow, `manual_edit_notion:notion`) === `saving`" class="jd-spin jd-spin-dark"></span><span x-text="fieldButtonStatus({!! $linkExpr !!}, fieldRow, `manual_edit_notion:notion`) === `saving` ? `Saving...` : `Save`"></span></button>
-                                                                <button type="button" class="jd-mini jd-mini-ok" x-show="bridgePhotoUrl(fieldRow)" :disabled="{!! $linkExpr !!}.photo_busy" @click.stop="importPhoto({!! $linkExpr !!}, bridgePhotoCandidate(fieldRow))" title="Set this image as the WordPress profile photo"><span x-show="{!! $linkExpr !!}.photo_busy===fieldRow.key" class="jd-spin"></span><span>Set as photo</span></button>
+                                                                <button type="button" class="jd-mini jd-mini-ok" x-show="bridgePhotoUrl(fieldRow) && !(bridgePhotoUrl(fieldRow)||``).includes(`/folders/`)" :disabled="{!! $linkExpr !!}.photo_busy" @click.stop="importPhoto({!! $linkExpr !!}, bridgePhotoCandidate(fieldRow))" title="Set this image as the WordPress profile photo"><span x-show="{!! $linkExpr !!}.photo_busy===fieldRow.key" class="jd-spin"></span><span>Set as photo</span></button><button type="button" class="jd-mini jd-mini-ghost" x-show="(bridgePhotoUrl(fieldRow)||``).includes(`/folders/`)" :disabled="{!! $linkExpr !!}.photo_busy" @click.stop="scanPhotos({!! $linkExpr !!})" title="This is a Google Drive folder, not a single image - scan it to load its photos into the candidate gallery below, then pick one."><span x-show="{!! $linkExpr !!}.photo_busy===`scan`" class="jd-spin jd-spin-dark"></span><span x-text="{!! $linkExpr !!}.photo_busy===`scan` ? `Scanning` : `Scan folder`"></span></button>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -98,7 +70,7 @@
                                                     <div style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;background:#fff;display:flex;flex-direction:column;">
                                                         <div x-data="{ld:false}" style="position:relative;height:130px;background:#f1f5f9;overflow:hidden;"><span x-show="!ld" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"><span class="jd-spin jd-spin-dark" style="width:20px;height:20px;"></span></span><img :src="candidate.thumb_url || candidate.url" x-on:load="ld=true" x-on:error="ld=true;$el.style.display=`none`" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;"><span style="position:absolute;top:5px;left:5px;background:rgba(15,23,42,.8);color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em;max-width:88%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" x-text="candidate.source_property || candidate.source_type || `source`"></span></div>
                                                         <div style="padding:6px 7px;font-size:10px;color:#64748b;line-height:1.35;min-width:0;"><div style="font-weight:700;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="candidate.name || `Image`"></div><div x-text="photoCandidateMeta(candidate)"></div></div>
-                                                        <button type="button" class="jd-mini jd-mini-ok" style="margin:0 7px 7px;justify-content:center;" :disabled="{!! $linkExpr !!}.photo_busy" @click.stop="importPhoto({!! $linkExpr !!}, candidate)"><span x-show="{!! $linkExpr !!}.photo_busy===(candidate.key || candidate.url)" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.photo_busy===(candidate.key || candidate.url) ? `Setting...` : `Use as profile photo`"></span></button>
+                                                        <button type="button" class="jd-mini jd-mini-ok" style="margin:0 7px 7px;justify-content:center;" :disabled="{!! $linkExpr !!}.photo_busy" @click.stop="importPhoto({!! $linkExpr !!}, candidate)"><span x-show="{!! $linkExpr !!}.photo_busy===(candidate.key || candidate.url)" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.photo_busy===(candidate.key || candidate.url) ? `Setting` : `Use as profile photo`"></span></button>
                                                     </div>
                                                 </template>
                                             </div>
@@ -118,6 +90,91 @@
                                         </div>
                                     </div>
                                     <div class="jd-sfpf-field-list">
+                                        <div class="jd-sfpf-field jd-sfpf-control-field" x-data="{ open: true }" @click.stop data-journalist-role-bridge>
+                                            <div class="jd-sfpf-field-head">
+                                                <div class="jd-sfpf-field-title-block">
+                                                    <div>
+                                                        <div class="jd-sfpf-field-label">WordPress Role</div>
+                                                        <div class="jd-sfpf-field-mapline"><span>Account control</span><b>role</b><span>→ WordPress</span><b>role</b></div>
+                                                    </div>
+                                                </div>
+                                                <div class="jd-sfpf-field-meta">
+                                                    <span x-show="{!! $linkExpr !!}.role_message" class="jd-sfpf-pill jd-sfpf-status-pill" :class="{!! $linkExpr !!}.role_error ? `is-error` : ``"><span x-text="{!! $linkExpr !!}.role_error ? `×` : `✓`"></span><span x-text="{!! $linkExpr !!}.role_error ? `Failed` : `Saved`"></span></span>
+                                                    <span class="jd-sfpf-pill">account</span>
+                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="open = !open" :aria-expanded="open ? `true` : `false`" x-text="open ? `Collapse` : `Expand`"></button>
+                                                </div>
+                                            </div>
+                                            <div x-show="!open" x-cloak class="jd-sfpf-collapsed-summary">
+                                                <div><b>WordPress Role</b><span> · role</span></div>
+                                                <div><b>WordPress:</b> <span x-text="`role = ` + ({!! $linkExpr !!}.role || `Empty`)"></span></div>
+                                                <div x-show="{!! $linkExpr !!}.role_message" x-text="{!! $linkExpr !!}.role_message"></div>
+                                            </div>
+                                            <div x-show="open" x-cloak class="jd-sfpf-field-body">
+                                                <div class="jd-sfpf-field-row">
+                                                    <div class="jd-sfpf-side jd-sfpf-side-notion">
+                                                        <div class="jd-sfpf-side-label"><span>ACCOUNT CONTROL</span><b>role</b></div>
+                                                        <input type="text" class="jd-cu-input" value="Managed directly on the WordPress user" readonly>
+                                                    </div>
+                                                    <div class="jd-sfpf-arrow">→</div>
+                                                    <div class="jd-sfpf-side jd-sfpf-side-wp">
+                                                        <div class="jd-sfpf-side-label"><span>WORDPRESS</span><b>role</b></div>
+                                                        <select class="jd-cu-input jd-cu-select" x-model="{!! $linkExpr !!}.role" :disabled="{!! $linkExpr !!}.role_busy">
+                                                            <template x-for="role in roleOptions" :key="role.value">
+                                                                <option :value="role.value" x-text="role.label"></option>
+                                                            </template>
+                                                        </select>
+                                                        <div class="jd-sfpf-side-actions">
+                                                            <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :disabled="{!! $linkExpr !!}.role_busy" @click.stop="updateWordPressRole({!! $linkExpr !!})">
+                                                                <span x-show="{!! $linkExpr !!}.role_busy" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.role_busy ? `Saving role...` : `Save role`"></span>
+                                                            </button>
+                                                        </div>
+                                                        <div class="jd-username-status" :class="{!! $linkExpr !!}.role_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.role_message" x-text="{!! $linkExpr !!}.role_message"></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="jd-sfpf-field jd-sfpf-control-field" x-show="{!! $linkExpr !!}.wp_user_id" x-data="{ open: true }" @click.stop data-journalist-username-recreate>
+                                            <div class="jd-sfpf-field-head">
+                                                <div class="jd-sfpf-field-title-block">
+                                                    <div>
+                                                        <div class="jd-sfpf-field-label">WordPress Username</div>
+                                                        <div class="jd-sfpf-field-mapline"><span>Suggested</span><b>username</b><span>→ WordPress</span><b>user_login</b></div>
+                                                    </div>
+                                                </div>
+                                                <div class="jd-sfpf-field-meta">
+                                                    <span x-show="{!! $linkExpr !!}.username_message" class="jd-sfpf-pill jd-sfpf-status-pill" :class="{!! $linkExpr !!}.username_error ? `is-error` : ``"><span x-text="{!! $linkExpr !!}.username_error ? `×` : `✓`"></span><span x-text="{!! $linkExpr !!}.username_error ? `Failed` : `Saved`"></span></span>
+                                                    <span class="jd-sfpf-pill">account</span>
+                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="open = !open" :aria-expanded="open ? `true` : `false`" x-text="open ? `Collapse` : `Expand`"></button>
+                                                </div>
+                                            </div>
+                                            <div x-show="!open" x-cloak class="jd-sfpf-collapsed-summary">
+                                                <div><b>WordPress Username</b><span> · user_login</span></div>
+                                                <div><b>Suggested:</b> <span x-text="linkUsernameSuggestion({!! $linkExpr !!}) || `none`"></span></div>
+                                                <div><b>WordPress:</b> <span x-text="`user_login = ` + ({!! $linkExpr !!}.wp_login || `Empty`)"></span></div>
+                                                <div x-show="{!! $linkExpr !!}.username_message" x-text="{!! $linkExpr !!}.username_message"></div>
+                                            </div>
+                                            <div x-show="open" x-cloak class="jd-sfpf-field-body">
+                                                <div class="jd-sfpf-field-row">
+                                                    <div class="jd-sfpf-side jd-sfpf-side-notion">
+                                                        <div class="jd-sfpf-side-label"><span>SUGGESTED</span><b>username</b></div>
+                                                        <input type="text" class="jd-cu-input" :value="linkUsernameSuggestion({!! $linkExpr !!}) || `none`" readonly>
+                                                    </div>
+                                                    <div class="jd-sfpf-arrow">→</div>
+                                                    <div class="jd-sfpf-side jd-sfpf-side-wp">
+                                                        <div class="jd-sfpf-side-label"><span>WORDPRESS</span><b>user_login</b></div>
+                                                        <input class="jd-cu-input" x-model="{!! $linkExpr !!}.username_new" :disabled="{!! $linkExpr !!}.username_busy" @input="{!! $linkExpr !!}.username_message = ``; {!! $linkExpr !!}.username_error = false" autocomplete="off">
+                                                        <div class="jd-sfpf-side-actions">
+                                                            <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" :disabled="{!! $linkExpr !!}.username_busy || !linkUsernameSuggestion({!! $linkExpr !!})" @click.stop="applyLinkUsernameSuggestion({!! $linkExpr !!})">Apply suggested</button>
+                                                            <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :disabled="{!! $linkExpr !!}.username_busy || !linkUsernameChanged({!! $linkExpr !!})" @click.stop="recreateWordPressUsername({!! $linkExpr !!})">
+                                                                <span x-show="{!! $linkExpr !!}.username_busy" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.username_busy ? `Replacing...` : `Recreate user with username`"></span>
+                                                            </button>
+                                                        </div>
+                                                        <div class="jd-username-help">Changing this creates a replacement WordPress user, reassigns content, then deletes the old user.</div>
+                                                        <div class="jd-username-status" :class="{!! $linkExpr !!}.username_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.username_message" x-text="{!! $linkExpr !!}.username_message"></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
                                         <template x-for="fieldRow in bridgeVisibleRows({!! $linkExpr !!}).filter(r => !r.is_photo_bridge)" :key="fieldRow.key">
                                             <div class="jd-sfpf-field" :class="fieldCardClass(fieldRow)" x-data="{ open: !fieldMarkedDone(fieldRow) }" x-effect="if(fieldMarkedDone(fieldRow)){ open=false } else if(fieldRow.save_status === `error`){ open=true }">
                                                 <div class="jd-sfpf-field-head">
@@ -140,7 +197,7 @@
                                                 <div x-show="!open" x-cloak class="jd-sfpf-collapsed-summary">
                                                     <div><b x-text="fieldRow.label"></b><span x-text="` · ` + (fieldRow.wp_field || `WordPress field`)"></span></div>
                                                     <div><b>Notion:</b> <span x-text="(fieldRow.notion_field || `—`) + ` = ` + fieldValuePreview(fieldRow.notion_value)"></span></div>
-                                                    <div><b>WordPress:</b> <span x-text="(fieldRow.wp_field || `—`) + ` = ` + fieldValuePreview(fieldRow.wp_value)"></span></div>
+                                                    <div><b>WordPress:</b> <span x-text="(fieldRow.wp_field || `—`) + ` = ` + fieldValuePreview(fieldDisplayValue(fieldRow, fieldRow.wp_value, `wordpress`))"></span></div>
                                                     <div x-show="fieldRow.save_status || fieldRow.save_message" x-cloak class="jd-sfpf-collapsed-live" :class="fieldRow.save_status || ``">
                                                         <span x-show="fieldRow.save_status === `saving`" class="jd-spin jd-spin-dark"></span>
                                                         <span x-show="fieldRow.save_status === `error`" class="jd-field-save-x">&#10005;</span>
@@ -172,13 +229,22 @@
                                                         <div class="jd-sfpf-arrow">→</div>
                                                         <div class="jd-sfpf-side jd-sfpf-side-wp">
                                                             <div class="jd-sfpf-side-label"><span>WORDPRESS</span><b x-text="fieldRow.wp_field || `—`"></b></div>
-                                                            <textarea x-model="fieldRow.wp_value" @input="markBridgeFieldDirty({!! $linkExpr !!}, fieldRow, `wordpress`, $event.target.value); resizeBridgeTextArea($event.target)" x-init="$nextTick(() => resizeBridgeTextArea($el))" x-effect="fieldRow.wp_value; $nextTick(() => resizeBridgeTextArea($el))" class="jd-sfpf-input" rows="1" :style="fieldInputStyle(fieldRow, `wordpress`)" ></textarea>
+                                                            <template x-if="fieldControlKind(fieldRow) !== `boolean`">
+                                                                <textarea x-model="fieldRow.wp_value" @input="markBridgeFieldDirty({!! $linkExpr !!}, fieldRow, `wordpress`, $event.target.value); resizeBridgeTextArea($event.target)" x-init="$nextTick(() => resizeBridgeTextArea($el))" x-effect="fieldRow.wp_value; $nextTick(() => resizeBridgeTextArea($el))" class="jd-sfpf-input" rows="1" :style="fieldInputStyle(fieldRow, `wordpress`)" ></textarea>
+                                                            </template>
+                                                            <template x-if="fieldControlKind(fieldRow) === `boolean`">
+                                                                <div class="jd-boolean-toggle" role="group" :aria-label="(fieldRow.label || fieldRow.wp_field || `Boolean field`) + ` WordPress value`">
+                                                                    <button type="button" :class="fieldBooleanValue(fieldRow.wp_value) ? `is-active` : ``" @click.stop="setBooleanFieldValue({!! $linkExpr !!}, fieldRow, true)">Yes</button>
+                                                                    <button type="button" :class="!fieldBooleanValue(fieldRow.wp_value) ? `is-active` : ``" @click.stop="setBooleanFieldValue({!! $linkExpr !!}, fieldRow, false)">No</button>
+                                                                    <span x-text="`Currently ` + fieldBooleanLabel(fieldRow.wp_value)"></span>
+                                                                </div>
+                                                            </template>
                                                             <div class="jd-sfpf-links" x-show="fieldValueLinks(fieldRow, `wordpress`).length">
                                                                 <template x-for="url in fieldValueLinks(fieldRow, `wordpress`)" :key="`w-` + url"><a :href="url" target="_blank" rel="noopener" class="jd-link" x-text="url"></a></template>
                                                             </div>
                                                             <div x-show="fieldProposedValue(fieldRow)" class="jd-sfpf-proposal" data-sfpf-field-proposal>
                                                                 <div class="jd-sfpf-proposal-top"><span x-text="fieldProposalLabel(fieldRow)"></span><button type="button" @click.stop="denyFieldProposal(fieldRow)" title="Dismiss proposal">×</button></div>
-                                                                <div class="jd-sfpf-proposal-value" x-text="fieldProposedValue(fieldRow)"></div>
+                                                                <div class="jd-sfpf-proposal-value" x-text="fieldProposalDisplayValue(fieldRow)"></div>
                                                                 <div class="jd-sfpf-proposal-why" x-show="fieldProposalReason(fieldRow)" x-text="fieldProposalReason(fieldRow)"></div>
                                                                 <div class="jd-sfpf-proposal-actions">
                                                                     <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :class="fieldButtonClass({!! $linkExpr !!}, fieldRow, `proposal_approve:wordpress`)" :disabled="fieldTargetBusy({!! $linkExpr !!}, fieldRow, `wordpress`) || !fieldProposedValue(fieldRow)" @click.stop="approveFieldProposal({!! $linkExpr !!}, fieldRow)" data-sfpf-action="approve-field-proposal">Approve</button>

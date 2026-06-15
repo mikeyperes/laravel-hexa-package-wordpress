@@ -90,8 +90,11 @@ class WordPressUserFieldBridgeService
                 return ["success" => false, "message" => (string) ($row["wp_disabled_reason"] ?? "This WordPress field cannot be written from Notion.")];
             }
 
-            $value = $overrideValue !== null ? $overrideValue : (string) ($row["notion_value"] ?? "");
-            $value = $this->transformValueForWordPress($value, (string) ($row["source_transform"] ?? ""));
+            if ($overrideValue !== null) {
+                $value = $overrideValue;
+            } else {
+                $value = $this->transformValueForWordPress((string) ($row["notion_value"] ?? ""), (string) ($row["source_transform"] ?? ""));
+            }
             $result = $this->writeWordPressValue($target, $userId, $row, $value);
             if (!($result["success"] ?? false)) {
                 return ["success" => false, "message" => $result["message"] ?? "WordPress field update failed."];
