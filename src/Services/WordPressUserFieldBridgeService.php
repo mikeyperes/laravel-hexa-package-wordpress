@@ -54,6 +54,7 @@ class WordPressUserFieldBridgeService
             "message" => "Field bridge loaded.",
             "rows" => $rows,
             "context" => $context,
+            "wp_user" => $wpData,
         ];
     }
 
