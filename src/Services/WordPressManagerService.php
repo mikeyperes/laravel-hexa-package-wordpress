@@ -760,11 +760,18 @@ class WordPressManagerService
     public function uploadMedia(array $target, string $filePath, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
     {
         $target = $this->normalizeTarget($target);
+        $localReadableSource = $filePath !== "" && !filter_var($filePath, FILTER_VALIDATE_URL) && is_file($filePath);
+        if ($localReadableSource) {
+            @chmod($filePath, 0644);
+        }
+
         if ($this->usesWpToolkit($target)) {
             if ($this->isLocalWhmServerTarget($target)) {
                 $direct = $this->directLocalMediaImport($target, $filePath, $fileName, $altText, $caption, $description);
-                $helperMissing = str_contains((string) ($direct["message"] ?? ""), "helper is not installed");
-                if (($direct["success"] ?? false) === true || (!$helperMissing && !$this->shouldFallbackFromDirectLocalTransportResult($direct))) {
+                $directMessage = strtolower((string) ($direct["message"] ?? ""));
+                $helperMissing = str_contains($directMessage, "helper is not installed");
+                $localPathUnreadable = str_contains($directMessage, "local media file does not exist or is not readable") || str_contains($directMessage, "failed to copy local media file");
+                if (($direct["success"] ?? false) === true || (!$helperMissing && !$localPathUnreadable && !$this->shouldFallbackFromDirectLocalTransportResult($direct))) {
                     return $direct;
                 }
             }
@@ -973,8 +980,11 @@ if (\$userId <= 0) {
     return;
 }
 if (\$mediaId > 0) {
-    if (!wp_attachment_is_image(\$mediaId)) {
-        echo "HEXA_AVATAR:" . wp_json_encode(["success" => false, "message" => "Media is not a WordPress image attachment."]);
+    \$post = get_post(\$mediaId);
+    \$mime = (string) get_post_mime_type(\$mediaId);
+    \$isImage = \$post && \$post->post_type === "attachment" && (wp_attachment_is_image(\$mediaId) || strpos(\$mime, "image/") === 0);
+    if (!\$isImage) {
+        echo "HEXA_AVATAR:" . wp_json_encode(["success" => false, "message" => "Media #" . \$mediaId . " is not a WordPress image attachment.", "media_id" => \$mediaId, "mime_type" => \$mime, "post_type" => \$post ? (string) \$post->post_type : "missing"]);
         return;
     }
     update_user_meta(\$userId, "wp_user_avatar", \$mediaId);
@@ -2343,6 +2353,11 @@ PHP;
             return ["success" => false, "message" => "Local media file does not exist or is not readable.", "data" => null];
         }
 
+        $importResult = $this->wpCliMediaImportReadableLocalMedia($target, $filePath, $fileName, $altText, $caption, $description);
+        if (($importResult["success"] ?? false) === true || filesize($filePath) > 750000) {
+            return $importResult;
+        }
+
         $payload = [
             "filename" => $fileName !== "" ? $fileName : basename($filePath),
             "contents" => base64_encode((string) file_get_contents($filePath)),
@@ -2413,6 +2428,75 @@ PHP;
                 "id" => $mediaId,
                 "media_url" => $url,
                 "url" => $url,
+            ],
+        ];
+    }
+
+    private function wpCliMediaImportReadableLocalMedia(array $target, string $filePath, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
+    {
+        $target = $this->normalizeTarget($target);
+        if (!$this->usesWpToolkit($target)) {
+            return ["success" => false, "message" => "Local media file imports require WP Toolkit.", "data" => null];
+        }
+
+        if (!is_file($filePath) || !is_readable($filePath)) {
+            return ["success" => false, "message" => "Local media file does not exist or is not readable.", "data" => null];
+        }
+
+        $title = trim((string) pathinfo($fileName !== "" ? $fileName : basename($filePath), PATHINFO_FILENAME));
+        $command = "media import " . escapeshellarg($filePath) . " --porcelain";
+        if ($title !== "") {
+            $command .= " --title=" . escapeshellarg($title);
+        }
+        if (trim($altText) !== "") {
+            $command .= " --alt=" . escapeshellarg(trim($altText));
+        }
+        if (trim($caption) !== "") {
+            $command .= " --caption=" . escapeshellarg(trim($caption));
+        }
+        if (trim($description) !== "") {
+            $command .= " --desc=" . escapeshellarg(trim($description));
+        }
+
+        $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command, 120);
+        if (!($result["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($result["message"] ?? "WP-CLI media import failed."), "data" => $result];
+        }
+
+        $stdout = trim((string) ($result["stdout"] ?? ""));
+        $stderr = trim((string) ($result["stderr"] ?? ""));
+        $rawOutput = trim($stdout . "\n" . $stderr);
+        $mediaId = 0;
+        foreach (preg_split('/\R/', $rawOutput) as $line) {
+            $line = trim((string) $line);
+            if ($line !== "" && ctype_digit($line)) {
+                $mediaId = (int) $line;
+            }
+        }
+        if ($mediaId <= 0 && preg_match('/attachment ID\s+(\d+)/i', $rawOutput, $match)) {
+            $mediaId = (int) $match[1];
+        }
+        if ($mediaId <= 0) {
+            return [
+                "success" => false,
+                "message" => "WP-CLI media import did not return a media ID: " . substr($rawOutput !== "" ? $rawOutput : "empty output", 0, 700),
+                "data" => ["stdout" => substr($stdout, 0, 2000), "stderr" => substr($stderr, 0, 2000)],
+            ];
+        }
+        $url = $this->wpCliAttachmentUrl($target, $mediaId);
+
+        return [
+            "success" => true,
+            "message" => "Media imported from local file via WP-CLI.",
+            "media_id" => $mediaId,
+            "data" => [
+                "media_id" => $mediaId,
+                "ID" => $mediaId,
+                "id" => $mediaId,
+                "media_url" => $url,
+                "url" => $url,
+                "file_size" => filesize($filePath) ?: null,
+                "sizes" => $url !== "" ? ["full" => $url] : [],
             ],
         ];
     }
