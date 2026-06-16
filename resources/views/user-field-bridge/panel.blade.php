@@ -15,181 +15,15 @@
                             <div class="jd-control-reason" x-show="{!! $linkExpr !!}.field_busy" x-text="disabledTitle({!! $linkExpr !!})"></div>
                             <template x-if="fieldBridgeLoaded({!! $linkExpr !!}) && {!! $linkExpr !!}.field_busy !== &quot;load&quot;">
                                 <div class="jd-sfpf-workspace">
-                                    <div class="jd-profile-photo-card jd-bridge-profile-photo-card" x-show="bridgePhotoRows({!! $linkExpr !!}).length" x-init="$nextTick(() => { if(!{!! $linkExpr !!}.photo_scanned_once && bridgePhotoRows({!! $linkExpr !!}).length){ {!! $linkExpr !!}.photo_scanned_once = true; scanPhotos({!! $linkExpr !!}); } })" data-journalist-profile-photo-bridge>
-                                        <div class="jd-profile-photo-head">
-                                            <div><div class="jd-profile-photo-title">Profile photo</div><div class="jd-profile-photo-note">Edit the Notion photo sources, paste image or Drive URLs, then pick any image to set the WordPress profile photo. Drive folders load into the candidate gallery on Scan.</div></div>
-                                            <div class="jd-gallery-actions">
-                                                @if(Route::has('google-drive.photo-renamer'))
-                                                    <a href="{{ route('google-drive.photo-renamer') }}" target="_blank" rel="noopener" class="jd-mini jd-mini-ghost" @click.stop>Photo renamer <span aria-hidden="true">&#8599;</span></a>
-                                                @else
-                                                    <a href="/google-drive/photo-renamer" target="_blank" rel="noopener" class="jd-mini jd-mini-ghost" @click.stop>Photo renamer <span aria-hidden="true">&#8599;</span></a>
-                                                @endif
-                                                <button type="button" class="jd-mini jd-mini-ghost" :disabled="photoScanBusy({!! $linkExpr !!})" @click.stop="scanPhotos({!! $linkExpr !!})" data-journalist-action="load-bridge-folder-photos"><span x-show="photoScanBusy({!! $linkExpr !!})" class="jd-spin jd-spin-dark"></span><span x-text="photoScanBusy({!! $linkExpr !!}) ? `Scanning...` : `Scan all sources`"></span></button>
-                                                <label class="jd-mini jd-mini-indigo" :style="photoMutationBusy({!! $linkExpr !!}) ? `opacity:.55;cursor:default` : ``" @click.stop data-journalist-action="upload-bridge-profile-photo"><span x-show="{!! $linkExpr !!}.photo_busy===`upload`" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.photo_busy===`upload` ? `Uploading...` : `Upload`"></span><input type="file" accept="image/*" style="display:none" :disabled="photoMutationBusy({!! $linkExpr !!})" @change="uploadPhotoFile({!! $linkExpr !!}, $event, bridgeDefaultPhotoField({!! $linkExpr !!}))"></label>
-                                            </div>
-                                        </div>
-                                        <div style="display:grid;grid-template-columns:minmax(160px,200px) minmax(0,1fr);gap:14px;align-items:start;">
-                                            <div style="border:1px solid #e5e7eb;border-radius:12px;background:#fff;padding:10px;">
-                                                <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;">On WordPress now</div>
-                                                <div style="height:140px;border-radius:10px;background:#f8fafc;border:1px solid #eef2f7;display:flex;align-items:center;justify-content:center;overflow:hidden;">
-                                                    <template x-if="profilePhotoUrl({!! $linkExpr !!})"><img :src="profilePhotoUrl({!! $linkExpr !!})" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;"></template>
-                                                    <template x-if="!profilePhotoUrl({!! $linkExpr !!})"><div style="width:64px;height:64px;border-radius:999px;background:#e0e7ff;color:#3730a3;font-weight:700;font-size:20px;display:flex;align-items:center;justify-content:center;" x-text="profilePhotoInitials({!! $linkExpr !!})"></div></template>
-                                                </div>
-                                                <div style="margin-top:8px;font-size:11px;color:#64748b;line-height:1.5;"><span x-text="profilePhotoUrl({!! $linkExpr !!}) ? `Profile photo set` : `No profile photo set`"></span><br><span x-text="profilePhotoSource({!! $linkExpr !!})"></span></div>
-                                            </div>
-                                            <div style="display:flex;flex-direction:column;gap:7px;">
-                                                <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;">Notion photo sources</div>
-                                                <template x-for="fieldRow in bridgePhotoRows({!! $linkExpr !!})" :key="fieldRow.key">
-                                                    <div style="display:flex;gap:11px;align-items:flex-start;border:1px solid #e5e7eb;border-radius:10px;padding:9px 10px;background:#fff;">
-                                                        <template x-if="bridgePhotoUrl(fieldRow) && !(bridgePhotoUrl(fieldRow)||``).includes(`/folders/`)"><div style="width:46px;height:46px;border-radius:8px;background:#f1f5f9;flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center;margin-top:17px;"><img :src="bridgePhotoUrl(fieldRow)" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" x-on:error="$el.style.display=`none`"></div></template>
-                                                        <div style="flex:1;min-width:0;">
-                                                            <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:3px;" x-text="fieldRow.notion_label || fieldRow.notion_field || fieldRow.label"></div>
-                                                            <input type="text" x-model="fieldRow.notion_value" @input="markBridgeFieldDirty({!! $linkExpr !!}, fieldRow, `notion`, $event.target.value)" placeholder="Paste an image or Google Drive URL..." style="width:100%;border:1px solid #e2e8f0;border-radius:7px;padding:6px 9px;font-size:12px;color:#0f172a;background:#fff;">
-                                                            <template x-if="(fieldRow.notion_value || ``).trim().toLowerCase().startsWith(`http`)">
-                                                                <a :href="(fieldRow.notion_value || ``).trim()" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;font-size:11px;color:#4338ca;text-decoration:underline;text-underline-offset:2px;word-break:break-all;max-width:100%;line-height:1.4;"><span x-text="(fieldRow.notion_value || ``).trim()"></span><span style="flex-shrink:0;font-size:12px;">&#8599;</span></a>
-                                                            </template>
-                                                            <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
-                                                                <button type="button" class="jd-mini jd-mini-ghost" :disabled="!canSaveNotionRow({!! $linkExpr !!}, fieldRow)" @click.stop="saveBridgeField({!! $linkExpr !!}, fieldRow, `notion`)" title="Save this value back to the Notion field"><span x-show="fieldButtonStatus({!! $linkExpr !!}, fieldRow, `manual_edit_notion:notion`) === `saving`" class="jd-spin jd-spin-dark"></span><span x-text="fieldButtonStatus({!! $linkExpr !!}, fieldRow, `manual_edit_notion:notion`) === `saving` ? `Saving...` : `Save`"></span></button>
-                                                                <button type="button" class="jd-mini jd-mini-indigo" x-show="photoFieldWantsFolder(fieldRow)" :disabled="{!! $linkExpr !!}.gallery_busy" @click.stop="createGalleryForPhotoField({!! $linkExpr !!}, fieldRow)" data-journalist-action="create-photo-source-folder" title="Create a Drive folder in the configured journalist parent folder and save it to this Notion photo source"><span x-show="photoFieldCreateBusy({!! $linkExpr !!}, fieldRow)" class="jd-spin"></span><span x-text="photoFieldCreateBusy({!! $linkExpr !!}, fieldRow) ? `Creating...` : photoFieldCreateFolderLabel({!! $linkExpr !!})"></span></button>
-                                                                <button type="button" class="jd-mini jd-mini-ok" x-show="bridgePhotoUrl(fieldRow) && !(bridgePhotoUrl(fieldRow)||``).includes(`/folders/`)" :disabled="photoMutationBusy({!! $linkExpr !!})" @click.stop="importPhoto({!! $linkExpr !!}, bridgePhotoCandidate(fieldRow))" title="Set this image as the WordPress profile photo"><span x-show="{!! $linkExpr !!}.photo_busy===fieldRow.key" class="jd-spin"></span><span>Set as photo</span></button><button type="button" class="jd-mini jd-mini-ghost" x-show="(bridgePhotoUrl(fieldRow)||``).includes(`/folders/`)" :disabled="{!! $linkExpr !!}.photo_busy === `scan` || photoRowScanBusy({!! $linkExpr !!}, fieldRow)" @click.stop="scanPhotos({!! $linkExpr !!}, fieldRow)" title="This is a Google Drive folder, not a single image - scan it to load its photos into the candidate gallery below, then pick one."><span x-show="photoRowScanBusy({!! $linkExpr !!}, fieldRow)" class="jd-spin jd-spin-dark"></span><span x-text="photoRowScanBusy({!! $linkExpr !!}, fieldRow) ? `Scanning` : `Scan folder`"></span></button>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </template>
-                                                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:2px;font-size:11px;color:#64748b;">
-                                                    <span style="font-weight:700;color:#475569;">Drive folder:</span>
-                                                    <template x-if="galleryFolderUrl({!! $linkExpr !!})"><a :href="galleryFolderUrl({!! $linkExpr !!})" target="_blank" rel="noopener" class="jd-link-lite" style="word-break:break-all;flex:1;min-width:120px;" x-text="galleryFolderUrl({!! $linkExpr !!})"></a></template>
-                                                    <template x-if="!galleryFolderUrl({!! $linkExpr !!})"><span style="color:#94a3b8;flex:1;">none saved</span></template>
-                                                    <button type="button" class="jd-mini jd-mini-ghost" :disabled="{!! $linkExpr !!}.gallery_busy" @click.stop="detectGallery({!! $linkExpr !!})"><span x-show="{!! $linkExpr !!}.gallery_busy===`find`" class="jd-spin jd-spin-dark"></span><span x-text="{!! $linkExpr !!}.gallery_busy===`find` ? `Detecting...` : `Detect`"></span></button>
-                                                    <button type="button" class="jd-mini jd-mini-indigo" :disabled="{!! $linkExpr !!}.gallery_busy" @click.stop="createGallery({!! $linkExpr !!})"><span x-show="{!! $linkExpr !!}.gallery_busy===`create`" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.gallery_busy===`create` ? `Creating...` : `Create`"></span></button>
-                                                </div>
-                                                <div class="jd-inline-status" x-show="{!! $linkExpr !!}.gallery_message" x-text="{!! $linkExpr !!}.gallery_message"></div>
-                                            </div>
-                                        </div>
-                                        <div x-show="photoCandidates({!! $linkExpr !!}).length" style="margin-top:12px;border-top:1px solid #e5e7eb;padding-top:10px;">
-                                            <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:8px;">Candidates &mdash; pick one for the WordPress profile photo</div>
-                                            <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;">
-                                                <template x-for="candidate in photoCandidates({!! $linkExpr !!})" :key="candidate.key || candidate.url">
-                                                    <div style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;background:#fff;display:flex;flex-direction:column;">
-                                                        <div x-data="{ld:false}" style="position:relative;height:130px;background:#f1f5f9;overflow:hidden;"><span x-show="!ld" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"><span class="jd-spin jd-spin-dark" style="width:20px;height:20px;"></span></span><img :src="candidate.thumb_url || candidate.url" x-on:load="ld=true" x-on:error="if(candidate.thumb_url && candidate.url && !$el.dataset.fallback){$el.dataset.fallback=`1`;$el.src=candidate.url}else{ld=true;$el.style.display=`none`}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;"><span style="position:absolute;top:5px;left:5px;background:rgba(15,23,42,.8);color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em;max-width:88%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" x-text="candidate.source_property || candidate.source_type || `source`"></span></div>
-                                                        <div style="padding:6px 7px;font-size:10px;color:#64748b;line-height:1.35;min-width:0;"><div style="font-weight:700;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="candidate.name || `Image`"></div><div x-text="photoCandidateMeta(candidate)"></div></div>
-                                                        <button type="button" class="jd-mini jd-mini-ok" style="margin:0 7px 7px;justify-content:center;" :disabled="photoMutationBusy({!! $linkExpr !!})" @click.stop="importPhoto({!! $linkExpr !!}, candidate)"><span x-show="{!! $linkExpr !!}.photo_busy===(candidate.key || candidate.url)" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.photo_busy===(candidate.key || candidate.url) ? `Setting` : `Use as profile photo`"></span></button>
-                                                    </div>
-                                                </template>
-                                            </div>
-                                        </div>
-                                        <div class="jd-inline-status" x-show="{!! $linkExpr !!}.photo_message" x-text="{!! $linkExpr !!}.photo_message" style="margin-top:8px;"></div>
-                                        <div class="jd-photo-step-log" x-show="photoSteps({!! $linkExpr !!}).length" x-cloak>
-                                            <template x-for="step in photoSteps({!! $linkExpr !!})" :key="step.label">
-                                                <div class="jd-photo-step" :class="photoStepClass(step)">
-                                                    <span class="jd-photo-step-icon" aria-hidden="true">
-                                                        <span x-show="step.state==&quot;working&quot;" class="jd-spin jd-spin-dark" style="width:12px;height:12px;"></span>
-                                                        <span x-show="step.state!=&quot;working&quot;" x-text="photoStepIcon(step)"></span>
-                                                    </span>
-                                                    <span class="jd-photo-step-label" x-text="step.label"></span>
-                                                    <span class="jd-photo-step-message" x-show="step.message" x-text="step.message"></span>
-                                                </div>
-                                            </template>
-                                        </div>
-                                    </div>
                                     <div class="jd-sfpf-field-list">
-                                        <div class="jd-sfpf-field jd-sfpf-control-field" x-data="{ open: true }" @click.stop data-journalist-role-bridge>
-                                            <div class="jd-sfpf-field-head">
-                                                <div class="jd-sfpf-field-title-block">
-                                                    <div>
-                                                        <div class="jd-sfpf-field-label">WordPress Role</div>
-                                                        <div class="jd-sfpf-field-mapline"><span>Account control</span><b>role</b><span>→ WordPress</span><b>role</b></div>
-                                                    </div>
-                                                </div>
-                                                <div class="jd-sfpf-field-meta">
-                                                    <span x-show="{!! $linkExpr !!}.role_busy || {!! $linkExpr !!}.role_message" class="jd-sfpf-pill jd-sfpf-status-pill" :class="{!! $linkExpr !!}.role_busy ? `is-saving` : ({!! $linkExpr !!}.role_error ? `is-error` : `is-success`)"><span x-show="{!! $linkExpr !!}.role_busy" class="jd-spin jd-spin-dark"></span><span x-show="!{!! $linkExpr !!}.role_busy" x-text="{!! $linkExpr !!}.role_error ? `×` : `✓`"></span><span x-text="{!! $linkExpr !!}.role_busy ? `Saving` : ({!! $linkExpr !!}.role_error ? `Failed` : `Saved`)"></span></span>
-                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="open = !open" :aria-expanded="open ? `true` : `false`" x-text="open ? `Collapse` : `Expand`"></button>
-                                                </div>
-                                            </div>
-                                            <div x-show="!open" x-cloak class="jd-sfpf-collapsed-summary">
-                                                <div><b>WordPress Role</b><span> · role</span></div>
-                                                <div><b>WordPress:</b> <span x-text="`role = ` + ({!! $linkExpr !!}.role || `Empty`)"></span></div>
-                                                <div x-show="{!! $linkExpr !!}.role_message" x-text="{!! $linkExpr !!}.role_message"></div>
-                                            </div>
-                                            <div x-show="open" x-cloak class="jd-sfpf-field-body">
-                                                <div class="jd-sfpf-field-row">
-                                                    <div class="jd-sfpf-side jd-sfpf-side-notion">
-                                                        <div class="jd-sfpf-side-label"><span>ACCOUNT CONTROL</span><b>role</b></div>
-                                                        <input type="text" class="jd-cu-input" value="Managed directly on the WordPress user" readonly>
-                                                    </div>
-                                                    <div class="jd-sfpf-arrow">→</div>
-                                                    <div class="jd-sfpf-side jd-sfpf-side-wp">
-                                                        <div class="jd-sfpf-side-label"><span>WORDPRESS</span><b>role</b></div>
-                                                        <select class="jd-cu-input jd-cu-select" x-model="{!! $linkExpr !!}.role" x-effect="$nextTick(() => { $el.value = {!! $linkExpr !!}.role || {!! $linkExpr !!}.role_current || `contributor`; })" :disabled="{!! $linkExpr !!}.role_busy" @change="{!! $linkExpr !!}.role_message = ``; {!! $linkExpr !!}.role_error = false">
-                                                            <option value="administrator">Administrator</option>
-                                                            <option value="editor">Editor</option>
-                                                            <option value="author">Author</option>
-                                                            <option value="contributor">Contributor</option>
-                                                            <option value="subscriber">Subscriber</option>
-                                                        </select>
-                                                        <div style="margin-top:8px;font-size:11px;color:#64748b;line-height:1.5;">
-                                                            <span>Current WordPress role: </span><strong style="color:#334155;" x-text="roleDisplayLabel({!! $linkExpr !!}.role_current || {!! $linkExpr !!}.role)"></strong>
-                                                            <span x-show="roleChanged({!! $linkExpr !!})"> · Selected change: <strong style="color:#3730a3;" x-text="roleDisplayLabel({!! $linkExpr !!}.role)"></strong></span>
-                                                        </div>
-                                                        <div class="jd-sfpf-side-actions">
-                                                            <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :disabled="{!! $linkExpr !!}.role_busy || !roleChanged({!! $linkExpr !!})" @click.stop="updateWordPressRole({!! $linkExpr !!})" :title="roleChanged({!! $linkExpr !!}) ? `Save the selected WordPress role` : `The selected role is already current`">
-                                                                <span x-show="{!! $linkExpr !!}.role_busy" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.role_busy ? `Saving role...` : `Save role`"></span>
-                                                            </button>
-                                                        </div>
-                                                        <div class="jd-username-status" :class="{!! $linkExpr !!}.role_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.role_message" x-text="{!! $linkExpr !!}.role_message"></div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="jd-sfpf-field jd-sfpf-control-field" x-show="{!! $linkExpr !!}.wp_user_id" x-data="{ open: true }" @click.stop data-journalist-username-recreate>
-                                            <div class="jd-sfpf-field-head">
-                                                <div class="jd-sfpf-field-title-block">
-                                                    <div>
-                                                        <div class="jd-sfpf-field-label">WordPress Username</div>
-                                                        <div class="jd-sfpf-field-mapline"><span>Suggested</span><b>username</b><span>→ WordPress</span><b>user_login</b></div>
-                                                    </div>
-                                                </div>
-                                                <div class="jd-sfpf-field-meta">
-                                                    <span x-show="{!! $linkExpr !!}.username_message" class="jd-sfpf-pill jd-sfpf-status-pill" :class="{!! $linkExpr !!}.username_error ? `is-error` : ``"><span x-text="{!! $linkExpr !!}.username_error ? `×` : `✓`"></span><span x-text="{!! $linkExpr !!}.username_error ? `Failed` : `Saved`"></span></span>
-                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="open = !open" :aria-expanded="open ? `true` : `false`" x-text="open ? `Collapse` : `Expand`"></button>
-                                                </div>
-                                            </div>
-                                            <div x-show="!open" x-cloak class="jd-sfpf-collapsed-summary">
-                                                <div><b>WordPress Username</b><span> · user_login</span></div>
-                                                <div><b>Suggested:</b> <span x-text="linkUsernameSuggestion({!! $linkExpr !!}) || `none`"></span></div>
-                                                <div><b>WordPress:</b> <span x-text="`user_login = ` + ({!! $linkExpr !!}.wp_login || `Empty`)"></span></div>
-                                                <div x-show="{!! $linkExpr !!}.username_message" x-text="{!! $linkExpr !!}.username_message"></div>
-                                            </div>
-                                            <div x-show="open" x-cloak class="jd-sfpf-field-body">
-                                                <div class="jd-sfpf-field-row">
-                                                    <div class="jd-sfpf-side jd-sfpf-side-notion">
-                                                        <div class="jd-sfpf-side-label"><span>SUGGESTED</span><b>username</b></div>
-                                                        <input type="text" class="jd-cu-input" :value="linkUsernameSuggestion({!! $linkExpr !!}) || `none`" readonly>
-                                                    </div>
-                                                    <div class="jd-sfpf-arrow">→</div>
-                                                    <div class="jd-sfpf-side jd-sfpf-side-wp">
-                                                        <div class="jd-sfpf-side-label"><span>WORDPRESS</span><b>user_login</b></div>
-                                                        <input class="jd-cu-input" x-model="{!! $linkExpr !!}.username_new" :disabled="{!! $linkExpr !!}.username_busy" @input="{!! $linkExpr !!}.username_message = ``; {!! $linkExpr !!}.username_error = false" autocomplete="off">
-                                                        <div class="jd-sfpf-side-actions">
-                                                            <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" :disabled="{!! $linkExpr !!}.username_busy || !linkUsernameSuggestion({!! $linkExpr !!})" @click.stop="applyLinkUsernameSuggestion({!! $linkExpr !!})">Apply suggested</button>
-                                                            <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :disabled="{!! $linkExpr !!}.username_busy || !linkUsernameChanged({!! $linkExpr !!})" @click.stop="recreateWordPressUsername({!! $linkExpr !!})">
-                                                                <span x-show="{!! $linkExpr !!}.username_busy" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.username_busy ? `Replacing...` : `Recreate user with username`"></span>
-                                                            </button>
-                                                        </div>
-                                                        <div class="jd-username-help">Changing this creates a replacement WordPress user, reassigns content, then deletes the old user.</div>
-                                                        <div class="jd-username-status" :class="{!! $linkExpr !!}.username_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.username_message" x-text="{!! $linkExpr !!}.username_message"></div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
                                         <template x-for="fieldRow in bridgeVisibleRows({!! $linkExpr !!}).filter(r => !r.is_photo_bridge)" :key="fieldRow.key">
-                                            <div class="jd-sfpf-field" :class="fieldCardClass(fieldRow)" x-data="{ open: !fieldMarkedDone(fieldRow) }" x-effect="if(fieldMarkedDone(fieldRow)){ open=false } else if(fieldRow.save_status === `error`){ open=true }">
+                                            <div class="jd-sfpf-field" :class="fieldCardClass(fieldRow)" :data-account-control="fieldAccountControlKind(fieldRow)" x-data="{ open: !fieldMarkedDone(fieldRow) }" x-effect="if(fieldMarkedDone(fieldRow)){ open=false } else if(fieldRow.save_status === `error`){ open=true }">
                                                 <div class="jd-sfpf-field-head">
                                                     <div class="jd-sfpf-field-title-block">
                                                         <span x-show="fieldMarkedDone(fieldRow)" class="jd-sfpf-done-icon">✓</span>
                                                         <div>
                                                             <div class="jd-sfpf-field-label" x-text="fieldRow.label"></div>
-                                                            <div class="jd-sfpf-field-mapline"><span>Notion</span><b x-text="fieldRow.notion_field || `—`"></b><span>→ WordPress</span><b x-text="fieldRow.wp_field || `—`"></b></div>
+                                                            <div class="jd-sfpf-field-mapline"><span x-text="fieldSourceLabel(fieldRow)"></span><b x-text="fieldRow.notion_field || `—`"></b><span>→ WordPress</span><b x-text="fieldRow.wp_field || `—`"></b></div>
                                                         </div>
                                                     </div>
                                                     <div class="jd-sfpf-field-meta">
@@ -202,7 +36,7 @@
                                                 </div>
                                                 <div x-show="!open" x-cloak class="jd-sfpf-collapsed-summary">
                                                     <div><b x-text="fieldRow.label"></b><span x-text="` · ` + (fieldRow.wp_field || `WordPress field`)"></span></div>
-                                                    <div><b>Notion:</b> <span x-text="(fieldRow.notion_field || `—`) + ` = ` + fieldValuePreview(fieldRow.notion_value)"></span></div>
+                                                    <div><b x-text="fieldSourceLabel(fieldRow) + `:`"></b> <span x-text="(fieldRow.notion_field || `—`) + ` = ` + fieldValuePreview(fieldRow.notion_value)"></span></div>
                                                     <div><b>WordPress:</b> <span x-text="(fieldRow.wp_field || `—`) + ` = ` + fieldValuePreview(fieldDisplayValue(fieldRow, fieldRow.wp_value, `wordpress`))"></span></div>
                                                     <div x-show="fieldRow.save_status || fieldRow.save_message" x-cloak class="jd-sfpf-collapsed-live" :class="fieldRow.save_status || ``">
                                                         <span x-show="fieldRow.save_status === `saving`" class="jd-spin jd-spin-dark"></span>
@@ -218,7 +52,59 @@
                                                         </div>
                                                     </template>
                                                 </div>
-                                                <div x-show="open" x-cloak class="jd-sfpf-field-body">
+                                                <template x-if="fieldAccountControlKind(fieldRow) === `role`">
+                                                    <div x-show="open" x-cloak class="jd-sfpf-field-body" data-journalist-role-bridge>
+                                                        <div class="jd-sfpf-field-row">
+                                                            <div class="jd-sfpf-side jd-sfpf-side-notion">
+                                                                <div class="jd-sfpf-side-label"><span>ACCOUNT CONTROL</span><b>role</b></div>
+                                                                <input type="text" class="jd-cu-input" :value="fieldRow.notion_value || `Managed directly on the WordPress user`" readonly>
+                                                            </div>
+                                                            <div class="jd-sfpf-arrow">→</div>
+                                                            <div class="jd-sfpf-side jd-sfpf-side-wp">
+                                                                <div class="jd-sfpf-side-label"><span>WORDPRESS</span><b>role</b></div>
+                                                                <select class="jd-cu-input" x-model="{!! $linkExpr !!}.role" :disabled="{!! $linkExpr !!}.role_busy" @change="syncAccountBridgeRow({!! $linkExpr !!}, fieldRow)">
+                                                                    <template x-for="role in roleOptions" :key="role.value">
+                                                                        <option :value="role.value" x-text="role.label"></option>
+                                                                    </template>
+                                                                </select>
+                                                                <div class="jd-username-help">
+                                                                    Current WordPress role: <strong x-text="roleDisplayLabel({!! $linkExpr !!}.role_current || {!! $linkExpr !!}.role)"></strong>
+                                                                    <span x-show="roleChanged({!! $linkExpr !!})"> · Selected change: <strong style="color:#3730a3;" x-text="roleDisplayLabel({!! $linkExpr !!}.role)"></strong></span>
+                                                                </div>
+                                                                <div class="jd-sfpf-side-actions">
+                                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :class="fieldButtonClass({!! $linkExpr !!}, fieldRow, `account_role:wordpress`)" :disabled="{!! $linkExpr !!}.role_busy || !roleChanged({!! $linkExpr !!})" @click.stop="saveAccountRole({!! $linkExpr !!}, fieldRow)" :title="roleChanged({!! $linkExpr !!}) ? `Save the selected WordPress role` : `The selected role is already current`">
+                                                                        <span x-show="{!! $linkExpr !!}.role_busy" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.role_busy ? `Saving role...` : `Save role`"></span>
+                                                                    </button>
+                                                                </div>
+                                                                <div class="jd-username-status" :class="{!! $linkExpr !!}.role_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.role_message" x-text="{!! $linkExpr !!}.role_message"></div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                                <template x-if="fieldAccountControlKind(fieldRow) === `username`">
+                                                    <div x-show="open" x-cloak class="jd-sfpf-field-body" data-journalist-username-recreate>
+                                                        <div class="jd-sfpf-field-row">
+                                                            <div class="jd-sfpf-side jd-sfpf-side-notion">
+                                                                <div class="jd-sfpf-side-label"><span>SUGGESTED</span><b>username</b></div>
+                                                                <input type="text" class="jd-cu-input" :value="linkUsernameSuggestion({!! $linkExpr !!}) || `none`" readonly>
+                                                            </div>
+                                                            <div class="jd-sfpf-arrow">→</div>
+                                                            <div class="jd-sfpf-side jd-sfpf-side-wp">
+                                                                <div class="jd-sfpf-side-label"><span>WORDPRESS</span><b>user_login</b></div>
+                                                                <input class="jd-cu-input" x-model="{!! $linkExpr !!}.username_new" :disabled="{!! $linkExpr !!}.username_busy" @input="{!! $linkExpr !!}.username_message = ``; {!! $linkExpr !!}.username_error = false; syncAccountBridgeRow({!! $linkExpr !!}, fieldRow)" autocomplete="off">
+                                                                <div class="jd-sfpf-side-actions">
+                                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" :disabled="{!! $linkExpr !!}.username_busy || !linkUsernameSuggestion({!! $linkExpr !!})" @click.stop="applyAccountUsernameSuggestion({!! $linkExpr !!}, fieldRow)">Apply suggested</button>
+                                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-wp" :class="fieldButtonClass({!! $linkExpr !!}, fieldRow, `account_username:wordpress`)" :disabled="{!! $linkExpr !!}.username_busy || !linkUsernameChanged({!! $linkExpr !!})" @click.stop="recreateAccountUsername({!! $linkExpr !!}, fieldRow)">
+                                                                        <span x-show="{!! $linkExpr !!}.username_busy" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.username_busy ? `Replacing...` : `Recreate user with username`"></span>
+                                                                    </button>
+                                                                </div>
+                                                                <div class="jd-username-help">Changing this creates a replacement WordPress user, reassigns content, then deletes the old user.</div>
+                                                                <div class="jd-username-status" :class="{!! $linkExpr !!}.username_error ? `is-error` : ``" x-show="{!! $linkExpr !!}.username_message" x-text="{!! $linkExpr !!}.username_message"></div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                                <div x-show="open && !fieldAccountControlKind(fieldRow)" x-cloak class="jd-sfpf-field-body">
                                                     <div class="jd-sfpf-field-row">
                                                         <div class="jd-sfpf-side jd-sfpf-side-notion">
                                                             <div class="jd-sfpf-side-label"><span>NOTION</span><b x-text="fieldRow.notion_field || `—`"></b></div>
@@ -295,6 +181,97 @@
                                                 </div>
                                             </div>
                                         </template>
+                                    </div>
+                                    <div class="jd-profile-photo-card jd-bridge-profile-photo-card" :class="profilePhotoCardClass({!! $linkExpr !!})" x-show="bridgePhotoRows({!! $linkExpr !!}).length" x-data="{ open: !profilePhotoBridgeDone({!! $linkExpr !!}) }" x-init="$nextTick(() => { if(!{!! $linkExpr !!}.photo_scanned_once && bridgePhotoRows({!! $linkExpr !!}).length){ {!! $linkExpr !!}.photo_scanned_once = true; scanPhotos({!! $linkExpr !!}); } })" x-effect="if(profilePhotoBridgeDone({!! $linkExpr !!})){ open=false } else if(profilePhotoBridgeHasError({!! $linkExpr !!})){ open=true }" data-journalist-profile-photo-bridge>
+                                        <div class="jd-profile-photo-head">
+                                            <div class="jd-sfpf-field-title-block"><span x-show="profilePhotoBridgeDone({!! $linkExpr !!})" class="jd-sfpf-done-icon">✓</span><div><div class="jd-profile-photo-title">Profile photo</div><div class="jd-profile-photo-note">Edit the Notion photo sources, paste image or Drive URLs, then pick any image to set the WordPress profile photo. Drive folders load into the candidate gallery on Scan.</div></div></div>
+                                            <div class="jd-sfpf-field-meta">
+                                                <button type="button" x-show="profilePhotoBridgeDone({!! $linkExpr !!})" class="jd-sfpf-pill jd-sfpf-pill-done" title="Move profile photo back to review" :disabled="{!! $linkExpr !!}.photo_completion_busy === true" @click.stop="setProfilePhotoBridgeDone({!! $linkExpr !!}, false); open=true">Completed <span class="jd-sfpf-pill-done-x" aria-hidden="true">&times;</span></button>
+                                                <span x-show="profilePhotoBridgeInSync({!! $linkExpr !!}) && !profilePhotoBridgeStatus({!! $linkExpr !!})" class="jd-sfpf-pill jd-sfpf-pill-sync">in sync</span>
+                                                <span x-show="profilePhotoBridgeStatus({!! $linkExpr !!})" class="jd-sfpf-pill jd-sfpf-status-pill" :class="`is-${profilePhotoBridgeStatus({!! $linkExpr !!})}`"><span class="jd-spin jd-spin-dark" x-show="profilePhotoBridgeStatus({!! $linkExpr !!}) === `saving`"></span><span x-show="profilePhotoBridgeStatus({!! $linkExpr !!}) !== `saving`" x-text="profilePhotoBridgeStatusIcon({!! $linkExpr !!})"></span><span x-text="profilePhotoBridgeStatusLabel({!! $linkExpr !!})"></span></span>
+                                                <button type="button" x-show="!profilePhotoBridgeDone({!! $linkExpr !!})" class="jd-sfpf-mini jd-sfpf-mini-done" :disabled="{!! $linkExpr !!}.photo_completion_busy === true" @click.stop="setProfilePhotoBridgeDone({!! $linkExpr !!}, true); open=false">Mark completed</button>
+                                                <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="open = !open" :aria-expanded="open ? `true` : `false`" x-text="open ? `Collapse` : `Expand`"></button>
+                                            </div>
+                                            <div class="jd-gallery-actions">
+                                                @if(Route::has('google-drive.photo-renamer'))
+                                                    <a href="{{ route('google-drive.photo-renamer') }}" target="_blank" rel="noopener" class="jd-mini jd-mini-ghost" @click.stop>Photo renamer <span aria-hidden="true">&#8599;</span></a>
+                                                @else
+                                                    <a href="/google-drive/photo-renamer" target="_blank" rel="noopener" class="jd-mini jd-mini-ghost" @click.stop>Photo renamer <span aria-hidden="true">&#8599;</span></a>
+                                                @endif
+                                                <button type="button" class="jd-mini jd-mini-ghost" :disabled="photoScanBusy({!! $linkExpr !!})" @click.stop="scanPhotos({!! $linkExpr !!})" data-journalist-action="load-bridge-folder-photos"><span x-show="photoScanBusy({!! $linkExpr !!})" class="jd-spin jd-spin-dark"></span><span x-text="photoScanBusy({!! $linkExpr !!}) ? `Scanning...` : `Scan all sources`"></span></button>
+                                                <label class="jd-mini jd-mini-indigo" :style="photoMutationBusy({!! $linkExpr !!}) ? `opacity:.55;cursor:default` : ``" @click.stop data-journalist-action="upload-bridge-profile-photo"><span x-show="{!! $linkExpr !!}.photo_busy===`upload`" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.photo_busy===`upload` ? `Uploading...` : `Upload`"></span><input type="file" accept="image/*" style="display:none" :disabled="photoMutationBusy({!! $linkExpr !!})" @change="uploadPhotoFile({!! $linkExpr !!}, $event, bridgeDefaultPhotoField({!! $linkExpr !!}))"></label>
+                                            </div>
+                                        </div>
+                                        <div x-show="!open" x-cloak class="jd-profile-photo-summary">
+                                            <div><b>Profile photo</b><span x-text="profilePhotoUrl({!! $linkExpr !!}) ? ` · WordPress avatar set` : ` · no WordPress avatar set`"></span></div>
+                                            <div><b>WordPress:</b> <span x-text="profilePhotoSource({!! $linkExpr !!})"></span></div>
+                                            <div x-show="{!! $linkExpr !!}.photo_message"><b>Status:</b> <span x-text="{!! $linkExpr !!}.photo_message"></span></div>
+                                        </div>
+                                        <div x-show="open" x-cloak class="jd-profile-photo-body">
+                                        <div style="display:grid;grid-template-columns:minmax(160px,200px) minmax(0,1fr);gap:14px;align-items:start;">
+                                            <div style="border:1px solid #e5e7eb;border-radius:12px;background:#fff;padding:10px;">
+                                                <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;">On WordPress now</div>
+                                                <div style="height:140px;border-radius:10px;background:#f8fafc;border:1px solid #eef2f7;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+                                                    <template x-if="profilePhotoUrl({!! $linkExpr !!})"><img :src="profilePhotoUrl({!! $linkExpr !!})" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;"></template>
+                                                    <template x-if="!profilePhotoUrl({!! $linkExpr !!})"><div style="width:64px;height:64px;border-radius:999px;background:#e0e7ff;color:#3730a3;font-weight:700;font-size:20px;display:flex;align-items:center;justify-content:center;" x-text="profilePhotoInitials({!! $linkExpr !!})"></div></template>
+                                                </div>
+                                                <div style="margin-top:8px;font-size:11px;color:#64748b;line-height:1.5;"><span x-text="profilePhotoUrl({!! $linkExpr !!}) ? `Profile photo set` : `No profile photo set`"></span><br><span x-text="profilePhotoSource({!! $linkExpr !!})"></span></div>
+                                            </div>
+                                            <div style="display:flex;flex-direction:column;gap:7px;">
+                                                <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;">Notion photo sources</div>
+                                                <template x-for="fieldRow in bridgePhotoRows({!! $linkExpr !!})" :key="fieldRow.key">
+                                                    <div style="display:flex;gap:11px;align-items:flex-start;border:1px solid #e5e7eb;border-radius:10px;padding:9px 10px;background:#fff;">
+                                                        <template x-if="bridgePhotoUrl(fieldRow) && !(bridgePhotoUrl(fieldRow)||``).includes(`/folders/`)"><div style="width:46px;height:46px;border-radius:8px;background:#f1f5f9;flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center;margin-top:17px;"><img :src="bridgePhotoUrl(fieldRow)" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" x-on:error="$el.style.display=`none`"></div></template>
+                                                        <div style="flex:1;min-width:0;">
+                                                            <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:3px;" x-text="fieldRow.notion_label || fieldRow.notion_field || fieldRow.label"></div>
+                                                            <input type="text" x-model="fieldRow.notion_value" @input="markBridgeFieldDirty({!! $linkExpr !!}, fieldRow, `notion`, $event.target.value)" placeholder="Paste an image or Google Drive URL..." style="width:100%;border:1px solid #e2e8f0;border-radius:7px;padding:6px 9px;font-size:12px;color:#0f172a;background:#fff;">
+                                                            <template x-if="(fieldRow.notion_value || ``).trim().toLowerCase().startsWith(`http`)">
+                                                                <a :href="(fieldRow.notion_value || ``).trim()" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;font-size:11px;color:#4338ca;text-decoration:underline;text-underline-offset:2px;word-break:break-all;max-width:100%;line-height:1.4;"><span x-text="(fieldRow.notion_value || ``).trim()"></span><span style="flex-shrink:0;font-size:12px;">&#8599;</span></a>
+                                                            </template>
+                                                            <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+                                                                <button type="button" class="jd-mini jd-mini-ghost" :disabled="!canSaveNotionRow({!! $linkExpr !!}, fieldRow)" @click.stop="saveBridgeField({!! $linkExpr !!}, fieldRow, `notion`)" title="Save this value back to the Notion field"><span x-show="fieldButtonStatus({!! $linkExpr !!}, fieldRow, `manual_edit_notion:notion`) === `saving`" class="jd-spin jd-spin-dark"></span><span x-text="fieldButtonStatus({!! $linkExpr !!}, fieldRow, `manual_edit_notion:notion`) === `saving` ? `Saving...` : `Save`"></span></button>
+                                                                <button type="button" class="jd-mini jd-mini-indigo" x-show="photoFieldWantsFolder(fieldRow)" :disabled="{!! $linkExpr !!}.gallery_busy" @click.stop="createGalleryForPhotoField({!! $linkExpr !!}, fieldRow)" data-journalist-action="create-photo-source-folder" title="Create a Drive folder in the configured journalist parent folder and save it to this Notion photo source"><span x-show="photoFieldCreateBusy({!! $linkExpr !!}, fieldRow)" class="jd-spin"></span><span x-text="photoFieldCreateBusy({!! $linkExpr !!}, fieldRow) ? `Creating...` : photoFieldCreateFolderLabel({!! $linkExpr !!})"></span></button>
+                                                                <button type="button" class="jd-mini jd-mini-ok" x-show="bridgePhotoUrl(fieldRow) && !(bridgePhotoUrl(fieldRow)||``).includes(`/folders/`)" :disabled="photoMutationBusy({!! $linkExpr !!})" @click.stop="importPhoto({!! $linkExpr !!}, bridgePhotoCandidate(fieldRow))" title="Set this image as the WordPress profile photo"><span x-show="{!! $linkExpr !!}.photo_busy===fieldRow.key" class="jd-spin"></span><span>Set as photo</span></button><button type="button" class="jd-mini jd-mini-ghost" x-show="(bridgePhotoUrl(fieldRow)||``).includes(`/folders/`)" :disabled="{!! $linkExpr !!}.photo_busy === `scan` || photoRowScanBusy({!! $linkExpr !!}, fieldRow)" @click.stop="scanPhotos({!! $linkExpr !!}, fieldRow)" title="This is a Google Drive folder, not a single image - scan it to load its photos into the candidate gallery below, then pick one."><span x-show="photoRowScanBusy({!! $linkExpr !!}, fieldRow)" class="jd-spin jd-spin-dark"></span><span x-text="photoRowScanBusy({!! $linkExpr !!}, fieldRow) ? `Scanning` : `Scan folder`"></span></button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:2px;font-size:11px;color:#64748b;">
+                                                    <span style="font-weight:700;color:#475569;">Drive folder:</span>
+                                                    <template x-if="galleryFolderUrl({!! $linkExpr !!})"><a :href="galleryFolderUrl({!! $linkExpr !!})" target="_blank" rel="noopener" class="jd-link-lite" style="word-break:break-all;flex:1;min-width:120px;" x-text="galleryFolderUrl({!! $linkExpr !!})"></a></template>
+                                                    <template x-if="!galleryFolderUrl({!! $linkExpr !!})"><span style="color:#94a3b8;flex:1;">none saved</span></template>
+                                                    <button type="button" class="jd-mini jd-mini-ghost" :disabled="{!! $linkExpr !!}.gallery_busy" @click.stop="detectGallery({!! $linkExpr !!})"><span x-show="{!! $linkExpr !!}.gallery_busy===`find`" class="jd-spin jd-spin-dark"></span><span x-text="{!! $linkExpr !!}.gallery_busy===`find` ? `Detecting...` : `Detect`"></span></button>
+                                                    <button type="button" class="jd-mini jd-mini-indigo" :disabled="{!! $linkExpr !!}.gallery_busy" @click.stop="createGallery({!! $linkExpr !!})"><span x-show="{!! $linkExpr !!}.gallery_busy===`create`" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.gallery_busy===`create` ? `Creating...` : `Create`"></span></button>
+                                                </div>
+                                                <div class="jd-inline-status" x-show="{!! $linkExpr !!}.gallery_message" x-text="{!! $linkExpr !!}.gallery_message"></div>
+                                            </div>
+                                        </div>
+                                        <div x-show="photoCandidates({!! $linkExpr !!}).length" style="margin-top:12px;border-top:1px solid #e5e7eb;padding-top:10px;">
+                                            <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:8px;">Candidates &mdash; pick one for the WordPress profile photo</div>
+                                            <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;">
+                                                <template x-for="candidate in photoCandidates({!! $linkExpr !!})" :key="candidate.key || candidate.url">
+                                                    <div style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;background:#fff;display:flex;flex-direction:column;">
+                                                        <div x-data="{ld:false}" style="position:relative;height:130px;background:#f1f5f9;overflow:hidden;"><span x-show="!ld" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"><span class="jd-spin jd-spin-dark" style="width:20px;height:20px;"></span></span><img :src="candidate.thumb_url || candidate.url" x-on:load="ld=true" x-on:error="if(candidate.thumb_url && candidate.url && !$el.dataset.fallback){$el.dataset.fallback=`1`;$el.src=candidate.url}else{ld=true;$el.style.display=`none`}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;"><span style="position:absolute;top:5px;left:5px;background:rgba(15,23,42,.8);color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em;max-width:88%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" x-text="candidate.source_property || candidate.source_type || `source`"></span></div>
+                                                        <div style="padding:6px 7px;font-size:10px;color:#64748b;line-height:1.35;min-width:0;"><div style="font-weight:700;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="candidate.name || `Image`"></div><div x-text="photoCandidateMeta(candidate)"></div></div>
+                                                        <button type="button" class="jd-mini jd-mini-ok" style="margin:0 7px 7px;justify-content:center;" :disabled="photoMutationBusy({!! $linkExpr !!})" @click.stop="importPhoto({!! $linkExpr !!}, candidate)"><span x-show="{!! $linkExpr !!}.photo_busy===(candidate.key || candidate.url)" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.photo_busy===(candidate.key || candidate.url) ? `Setting` : `Use as profile photo`"></span></button>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </div>
+                                        <div class="jd-inline-status" x-show="{!! $linkExpr !!}.photo_message" x-text="{!! $linkExpr !!}.photo_message" style="margin-top:8px;"></div>
+                                        <div class="jd-photo-step-log" x-show="photoSteps({!! $linkExpr !!}).length" x-cloak>
+                                            <template x-for="step in photoSteps({!! $linkExpr !!})" :key="step.label">
+                                                <div class="jd-photo-step" :class="photoStepClass(step)">
+                                                    <span class="jd-photo-step-icon" aria-hidden="true">
+                                                        <span x-show="step.state==&quot;working&quot;" class="jd-spin jd-spin-dark" style="width:12px;height:12px;"></span>
+                                                        <span x-show="step.state!=&quot;working&quot;" x-text="photoStepIcon(step)"></span>
+                                                    </span>
+                                                    <span class="jd-photo-step-label" x-text="step.label"></span>
+                                                    <span class="jd-photo-step-message" x-show="step.message" x-text="step.message"></span>
+                                                </div>
+                                            </template>
+                                        </div>
+                                        </div>
                                     </div>
                                     <div class="jd-sfpf-actions" data-testid="journalist-sfpf-field-actions">
                                         <button type="button" class="jd-sfpf-btn jd-sfpf-btn-copy" :class="workspaceButtonClass({!! $linkExpr !!}, `transfer`)" :disabled="bridgeCardBusy({!! $linkExpr !!}) || !bridgeWritableRows({!! $linkExpr !!}).length" :title="bridgeCardBusy({!! $linkExpr !!}) ? disabledTitle({!! $linkExpr !!}) : (!bridgeWritableRows({!! $linkExpr !!}).length ? `No writable Notion to WordPress fields are available.` : `Copy all writable Notion values to WordPress`)" @click.stop="transferCardFromNotion({!! $linkExpr !!})" data-sfpf-action="journalist-copy-notion-to-wordpress">
