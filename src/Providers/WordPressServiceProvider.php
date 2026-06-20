@@ -3,6 +3,9 @@
 namespace hexa_package_wordpress\Providers;
 
 use Illuminate\Support\ServiceProvider;
+use hexa_package_wordpress\Acf\AcfRepeaterNormalizer;
+use hexa_package_wordpress\Acf\AcfSmartTypeResolver;
+use hexa_package_wordpress\Acf\AcfStructureRegistry;
 use hexa_package_wordpress\Services\WordPressManagerService;
 use hexa_package_wordpress\Services\WordPressPluginIntegrityService;
 use hexa_package_wordpress\Services\WordPressService;
@@ -21,6 +24,9 @@ class WordPressServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../../config/wordpress.php', 'wordpress');
+        $this->app->singleton(AcfStructureRegistry::class);
+        $this->app->singleton(AcfRepeaterNormalizer::class);
+        $this->app->singleton(AcfSmartTypeResolver::class);
         $this->app->singleton(WordPressService::class);
         $this->app->singleton(WordPressManagerService::class);
         $this->app->singleton(WordPressPluginIntegrityService::class);
