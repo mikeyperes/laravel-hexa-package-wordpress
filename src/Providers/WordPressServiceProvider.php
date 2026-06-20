@@ -7,6 +7,7 @@ use hexa_package_wordpress\Acf\AcfRepeaterNormalizer;
 use hexa_package_wordpress\Acf\AcfSmartTypeResolver;
 use hexa_package_wordpress\Acf\AcfStructureRegistry;
 use hexa_package_wordpress\Services\WordPressManagerService;
+use hexa_package_wordpress\Services\WordPressPluginIntegrityService;
 use hexa_package_wordpress\Services\WordPressService;
 use hexa_package_wordpress\Services\WordPressUserFieldBridgeService;
 use hexa_package_wordpress\Services\WordPressUserFieldMap;
@@ -28,6 +29,7 @@ class WordPressServiceProvider extends ServiceProvider
         $this->app->singleton(AcfSmartTypeResolver::class);
         $this->app->singleton(WordPressService::class);
         $this->app->singleton(WordPressManagerService::class);
+        $this->app->singleton(WordPressPluginIntegrityService::class);
         $this->app->singleton(WordPressUserFieldBridgeService::class);
         $this->app->singleton(WordPressUserFieldMap::class);
     }

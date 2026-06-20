@@ -44,28 +44,9 @@ class WordPressUserFieldBridgeService
                 continue;
             }
 
-            $notionField = $this->firstExistingField($properties, (array) ($definition["notion_fields"] ?? []));
-            $notionValue = $notionField !== "" ? $this->stringValue($properties[$notionField] ?? "") : "";
-            $wpValue = $this->readWordPressValue($wpData, $definition);
-            $canWriteWp = $this->canWriteWordPress($definition, $notionField);
-            $canWriteNotion = $this->canWriteNotion($definition, $notionField);
-
-            $rows[] = [
-                "key" => $key,
-                "label" => (string) ($definition["label"] ?? $key),
-                "notion_field" => $notionField,
-                "notion_fields" => array_values(array_map("strval", (array) ($definition["notion_fields"] ?? []))),
-                "notion_value" => $notionValue,
-                "wp_field" => $wpField,
-                "wp_type" => (string) ($definition["wp_type"] ?? "native"),
-                "wp_page" => (string) ($definition["wp_page"] ?? "profile.php"),
-                "wp_value" => $wpValue,
-                "can_write_wp" => $canWriteWp,
-                "can_write_notion" => $canWriteNotion,
-                "wp_disabled_reason" => $canWriteWp ? "" : $this->disabledReason($definition, "notion_to_wp", $notionField),
-                "notion_disabled_reason" => $canWriteNotion ? "" : $this->disabledReason($definition, "wp_to_notion", $notionField),
-                "source_transform" => (string) ($definition["source_transform"] ?? ""),
-            ];
+            foreach ($this->rowsForDefinition($properties, $wpData, $definition, $key, $wpField, $context) as $row) {
+                $rows[] = $row;
+            }
         }
 
         return [
@@ -73,6 +54,7 @@ class WordPressUserFieldBridgeService
             "message" => "Field bridge loaded.",
             "rows" => $rows,
             "context" => $context,
+            "wp_user" => $wpData,
         ];
     }
 
@@ -100,17 +82,28 @@ class WordPressUserFieldBridgeService
             return ["success" => false, "message" => "Unknown user field bridge row."];
         }
 
+        $verifiedWpKey = "";
+        $verifiedWpLabel = "";
+        $verifiedWpValue = null;
+
         if ($direction === "notion_to_wp") {
             if (!($row["can_write_wp"] ?? false)) {
                 return ["success" => false, "message" => (string) ($row["wp_disabled_reason"] ?? "This WordPress field cannot be written from Notion.")];
             }
 
-            $value = $overrideValue !== null ? $overrideValue : (string) ($row["notion_value"] ?? "");
-            $value = $this->transformValueForWordPress($value, (string) ($row["source_transform"] ?? ""));
+            if ($overrideValue !== null) {
+                $value = $overrideValue;
+            } else {
+                $value = $this->transformValueForWordPress((string) ($row["notion_value"] ?? ""), (string) ($row["source_transform"] ?? ""));
+            }
             $result = $this->writeWordPressValue($target, $userId, $row, $value);
             if (!($result["success"] ?? false)) {
                 return ["success" => false, "message" => $result["message"] ?? "WordPress field update failed."];
             }
+
+            $verifiedWpKey = (string) ($row["key"] ?? $key);
+            $verifiedWpLabel = (string) ($row["label"] ?? $key);
+            $verifiedWpValue = $value;
         } elseif ($direction === "wp_to_notion") {
             if (!($row["can_write_notion"] ?? false)) {
                 return ["success" => false, "message" => (string) ($row["notion_disabled_reason"] ?? "This Notion field cannot be written from WordPress.")];
@@ -126,9 +119,158 @@ class WordPressUserFieldBridgeService
         }
 
         $fresh = $this->payload($target, $userId, $notionPageId, $fields, $context);
+        if ($verifiedWpKey !== "" && ($fresh["success"] ?? false)) {
+            $verifiedRow = null;
+            foreach ((array) ($fresh["rows"] ?? []) as $candidate) {
+                if (is_array($candidate) && (string) ($candidate["key"] ?? "") === $verifiedWpKey) {
+                    $verifiedRow = $candidate;
+                    break;
+                }
+            }
+
+            $actualValue = is_array($verifiedRow) ? (string) ($verifiedRow["wp_value"] ?? "") : "";
+            $expectedValue = (string) $verifiedWpValue;
+            if (!$verifiedRow || $this->normalizeComparableValue($actualValue) !== $this->normalizeComparableValue($expectedValue)) {
+                $fresh["success"] = false;
+                $fresh["message"] = "WordPress write did not verify for " . $verifiedWpLabel . ". Expected " . $this->valuePreview($expectedValue) . "; read back " . $this->valuePreview($actualValue) . ".";
+                return $fresh;
+            }
+        }
+
         $fresh["message"] = "Field value pushed.";
 
         return $fresh;
+    }
+
+    /**
+     * @param array<string, mixed> $properties
+     * @param array<string, mixed> $wpData
+     * @param array<string, mixed> $definition
+     * @return array<int, array<string, mixed>>
+     */
+    protected function rowsForDefinition(array $properties, array $wpData, array $definition, string $key, string $wpField, array $context = []): array
+    {
+        $wpValue = $this->readWordPressValue($wpData, $definition);
+        $targets = $this->expandedNotionTargets($properties, $definition);
+        $rows = [];
+        $isExpanded = (bool) ($definition["expand_notion_fields"] ?? false);
+        $isPhotoBridge = (bool) ($definition["photo_bridge"] ?? false) || (string) ($definition["wp_type"] ?? "native") === "profile_photo";
+
+        foreach ($targets as $index => $target) {
+            $notionField = (string) ($target["field"] ?? "");
+            $notionLabel = (string) ($target["label"] ?? "");
+            $rowKey = $isExpanded ? $key . ":" . $this->rowKeySegment($notionLabel !== "" ? $notionLabel : ($notionField !== "" ? $notionField : (string) $index)) : $key;
+            $notionValue = $notionField !== "" ? $this->stringValue($properties[$notionField] ?? "") : "";
+            $canWriteWp = $this->canWriteWordPress($definition, $notionField);
+            $canWriteNotion = $this->canWriteNotion($definition, $notionField);
+            $baseLabel = (string) ($definition["label"] ?? $key);
+            $sourceTransform = (string) ($definition["source_transform"] ?? "");
+            $wpProposedValue = "";
+            $wpProposalReason = "";
+
+            if ($canWriteWp && $wpField === "user_email" && trim($wpValue) === "") {
+                $candidate = $this->suggestedPublicationEmail($properties, $context);
+                if ($candidate !== "") {
+                    $wpProposedValue = $candidate;
+                    $wpProposalReason = "Suggested from the journalist name and publication domain because the WordPress email is empty.";
+                }
+            }
+
+            if ($canWriteWp && $wpProposedValue === "" && $notionValue !== "") {
+                $candidate = $this->transformValueForWordPress($notionValue, $sourceTransform);
+                if ($candidate !== "" && $this->normalizeComparableValue($candidate) !== $this->normalizeComparableValue($wpValue)) {
+                    $wpProposedValue = $candidate;
+                    $sourceLabel = $notionField !== "" ? $notionField : ($notionLabel !== "" ? $notionLabel : "Notion");
+                    $wpProposalReason = $sourceTransform !== ""
+                        ? "Derived from " . $sourceLabel . " using the " . str_replace("_", " ", $sourceTransform) . " transform."
+                        : "Notion and WordPress values differ.";
+                }
+            }
+
+            $rows[] = [
+                "key" => $rowKey,
+                "base_key" => $key,
+                "label" => $isExpanded && $notionLabel !== "" ? $baseLabel . " - " . $notionLabel : $baseLabel,
+                "notion_label" => $notionLabel,
+                "notion_field" => $notionField,
+                "notion_fields" => array_values(array_map("strval", (array) ($target["fields"] ?? ($definition["notion_fields"] ?? [])))),
+                "notion_value" => $notionValue,
+                "wp_field" => $wpField,
+                "wp_type" => (string) ($definition["wp_type"] ?? "native"),
+                "wp_page" => (string) ($definition["wp_page"] ?? "profile.php"),
+                "wp_value" => $wpValue,
+                "wp_proposed_value" => $wpProposedValue,
+                "wp_proposal_reason" => $wpProposalReason,
+                "wp_proposal_target" => $wpProposedValue !== "" ? "wordpress" : "",
+                "can_write_wp" => $canWriteWp,
+                "can_write_notion" => $canWriteNotion,
+                "wp_disabled_reason" => $canWriteWp ? "" : $this->disabledReason($definition, "notion_to_wp", $notionField),
+                "notion_disabled_reason" => $canWriteNotion ? "" : $this->disabledReason($definition, "wp_to_notion", $notionField),
+                "source_transform" => $sourceTransform,
+                "is_photo_bridge" => $isPhotoBridge,
+                "photo_upload" => $isPhotoBridge && (bool) ($definition["photo_upload"] ?? true),
+                "photo_role" => $notionLabel,
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param array<string, mixed> $properties
+     * @param array<string, mixed> $definition
+     * @return array<int, array{field: string, fields: array<int, string>, label: string}>
+     */
+    protected function expandedNotionTargets(array $properties, array $definition): array
+    {
+        $showMissing = (bool) ($definition["show_missing_notion_fields"] ?? false);
+        if (!($definition["expand_notion_fields"] ?? false)) {
+            $fields = array_values(array_map("strval", (array) ($definition["notion_fields"] ?? [])));
+            $field = $this->firstExistingField($properties, $fields);
+            return [["field" => $field, "fields" => $fields, "label" => ""]];
+        }
+
+        $groups = is_array($definition["notion_field_groups"] ?? null) ? $definition["notion_field_groups"] : [];
+        if ($groups === []) {
+            foreach ((array) ($definition["notion_fields"] ?? []) as $field) {
+                $field = (string) $field;
+                if ($field !== "") {
+                    $groups[] = ["label" => $field, "fields" => [$field]];
+                }
+            }
+        }
+
+        $targets = [];
+        foreach ($groups as $index => $group) {
+            if (is_array($group)) {
+                $label = trim((string) ($group["label"] ?? ""));
+                $fields = array_values(array_map("strval", (array) ($group["fields"] ?? [])));
+            } else {
+                $label = trim((string) $group);
+                $fields = [$label];
+            }
+
+            $fields = array_values(array_filter($fields, static fn (string $field): bool => trim($field) !== ""));
+            $field = $this->firstExistingField($properties, $fields);
+            if ($field === "" && !$showMissing) {
+                continue;
+            }
+
+            $targets[] = [
+                "field" => $field,
+                "fields" => $fields,
+                "label" => $label !== "" ? $label : ($field !== "" ? $field : "Field " . ((int) $index + 1)),
+            ];
+        }
+
+        return $targets;
+    }
+
+    protected function rowKeySegment(string $value): string
+    {
+        $value = strtolower(trim($value));
+        $value = preg_replace("/[^a-z0-9]+/", "_", $value) ?? $value;
+        return trim($value, "_") ?: "field";
     }
 
     /**
@@ -229,6 +371,73 @@ class WordPressUserFieldBridgeService
         return "This field direction is not available.";
     }
 
+
+    /**
+     * @param array<string, mixed> $properties
+     * @param array<string, mixed> $context
+     */
+    protected function suggestedPublicationEmail(array $properties, array $context): string
+    {
+        $domain = trim((string) ($context["publication_domain"] ?? ""));
+        if ($domain === "") {
+            $url = trim((string) ($context["publication_url"] ?? ""));
+            $domain = (string) (parse_url($url, PHP_URL_HOST) ?: $url);
+        }
+
+        $domain = preg_replace("/^www\./i", "", trim($domain)) ?: "";
+        $domain = mb_strtolower($domain);
+        $domain = preg_replace("/[^a-z0-9.-]+/", "", $domain) ?: "";
+        if ($domain === "" || !str_contains($domain, ".")) {
+            return "";
+        }
+
+        $nameField = $this->firstExistingField($properties, ["Full Name", "Name"]);
+        $name = $nameField !== "" ? $this->stringValue($properties[$nameField] ?? "") : "";
+        if ($name === "") {
+            $name = trim((string) ($context["profile_name"] ?? ""));
+        }
+
+        [$first, $last] = $this->splitName($name);
+        $first = $this->emailNameSegment($first);
+        $last = $this->emailNameSegment($last);
+        if ($first === "") {
+            return "";
+        }
+
+        return ($last !== "" ? $first . "." . $last : $first) . "@" . $domain;
+    }
+
+    protected function emailNameSegment(string $value): string
+    {
+        $value = mb_strtolower(trim($value));
+        $ascii = iconv("UTF-8", "ASCII//TRANSLIT//IGNORE", $value);
+        if (is_string($ascii) && $ascii !== "") {
+            $value = $ascii;
+        }
+
+        $value = preg_replace("/[^a-z0-9]+/", ".", $value) ?: "";
+        return trim($value, ".");
+    }
+
+    protected function normalizeComparableValue(string $value): string
+    {
+        $value = mb_strtolower(trim($value));
+        $value = preg_replace("/\r\n/u", "\n", $value) ?? $value;
+        $value = preg_replace("/[ \t]+/u", " ", $value) ?? $value;
+
+        return trim($value);
+    }
+
+    protected function valuePreview(string $value): string
+    {
+        $value = trim((string) (preg_replace("/\s+/u", " ", $value) ?? $value));
+        if ($value === "") {
+            return "Empty";
+        }
+
+        return mb_strlen($value) > 90 ? mb_substr($value, 0, 90) . "..." : $value;
+    }
+
     protected function transformValueForWordPress(string $value, string $transform): string
     {
         $value = trim($value);
@@ -240,7 +449,30 @@ class WordPressUserFieldBridgeService
             return $this->splitName($value)[1];
         }
 
+        if ($transform === "verified_boolean") {
+            return $this->verifiedBooleanValue($value);
+        }
+
         return $value;
+    }
+
+    protected function verifiedBooleanValue(string $value): string
+    {
+        $normalized = mb_strtolower(trim($value));
+        if ($normalized === "") {
+            return "0";
+        }
+
+        $negativeValues = ["0", "false", "no", "none", "n/a", "na", "not verified", "unverified"];
+        if (in_array($normalized, $negativeValues, true)) {
+            return "0";
+        }
+
+        if (preg_match("/\b(unverified|not\s+verified|false|none|n\/?a)\b/u", $normalized)) {
+            return "0";
+        }
+
+        return "1";
     }
 
     /**
