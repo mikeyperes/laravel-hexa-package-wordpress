@@ -230,45 +230,60 @@
                                                 </div>
                                                 <div style="margin-top:8px;font-size:11px;color:#64748b;line-height:1.5;"><span x-text="profilePhotoUrl({!! $linkExpr !!}) ? `Profile photo set` : `No profile photo set`"></span><br><span x-text="profilePhotoSource({!! $linkExpr !!})"></span></div>
                                             </div>
-                                            <div style="display:flex;flex-direction:column;gap:7px;">
-                                                <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;">Notion photo sources</div>
-                                                <template x-for="fieldRow in bridgePhotoRows({!! $linkExpr !!})" :key="fieldRow.key">
-                                                    <div style="display:flex;gap:11px;align-items:flex-start;border:1px solid #e5e7eb;border-radius:10px;padding:9px 10px;background:#fff;">
-                                                        <template x-if="bridgePhotoUrl(fieldRow) && !(bridgePhotoUrl(fieldRow)||``).includes(`/folders/`)"><div style="width:46px;height:46px;border-radius:8px;background:#f1f5f9;flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center;margin-top:17px;"><img :src="bridgePhotoUrl(fieldRow)" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" x-on:error="markDeadBridgePhoto(fieldRow, {!! $linkExpr !!}, $event)"></div></template>
-                                                        <div style="flex:1;min-width:0;">
-                                                            <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:3px;" x-text="fieldRow.notion_label || fieldRow.notion_field || fieldRow.label"></div>
-                                                            <input type="text" x-model="fieldRow.notion_value" @input="markBridgeFieldDirty({!! $linkExpr !!}, fieldRow, `notion`, $event.target.value)" placeholder="Paste an image or Google Drive URL..." style="width:100%;border:1px solid #e2e8f0;border-radius:7px;padding:6px 9px;font-size:12px;color:#0f172a;background:#fff;">
-                                                            <template x-if="(fieldRow.notion_value || ``).trim().toLowerCase().startsWith(`http`)">
-                                                                <a :href="(fieldRow.notion_value || ``).trim()" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;font-size:11px;color:#4338ca;text-decoration:underline;text-underline-offset:2px;word-break:break-all;max-width:100%;line-height:1.4;"><span x-text="(fieldRow.notion_value || ``).trim()"></span><span style="flex-shrink:0;font-size:12px;">&#8599;</span></a>
-                                                            </template>
-                                                            <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
-                                                                <button type="button" class="jd-mini jd-mini-ghost" :disabled="!canSaveNotionRow({!! $linkExpr !!}, fieldRow)" @click.stop="saveBridgeField({!! $linkExpr !!}, fieldRow, `notion`)" title="Save this value back to the Notion field"><span x-show="fieldButtonStatus({!! $linkExpr !!}, fieldRow, `manual_edit_notion:notion`) === `saving`" class="jd-spin jd-spin-dark"></span><span x-text="fieldButtonStatus({!! $linkExpr !!}, fieldRow, `manual_edit_notion:notion`) === `saving` ? `Saving...` : `Save`"></span></button>
-                                                                <button type="button" class="jd-mini jd-mini-indigo" x-show="photoFieldWantsFolder(fieldRow)" :disabled="{!! $linkExpr !!}.gallery_busy" @click.stop="createGalleryForPhotoField({!! $linkExpr !!}, fieldRow)" data-journalist-action="create-photo-source-folder" title="Create a Drive folder in the configured journalist parent folder and save it to this Notion photo source"><span x-show="photoFieldCreateBusy({!! $linkExpr !!}, fieldRow)" class="jd-spin"></span><span x-text="photoFieldCreateBusy({!! $linkExpr !!}, fieldRow) ? `Creating...` : photoFieldCreateFolderLabel({!! $linkExpr !!})"></span></button>
-                                                                <button type="button" class="jd-mini jd-mini-ok" x-show="bridgePhotoUrl(fieldRow) && !(bridgePhotoUrl(fieldRow)||``).includes(`/folders/`)" :disabled="photoMutationBusy({!! $linkExpr !!})" @click.stop="importPhoto({!! $linkExpr !!}, bridgePhotoCandidate(fieldRow))" title="Set this image as the WordPress profile photo"><span x-show="{!! $linkExpr !!}.photo_busy===fieldRow.key" class="jd-spin"></span><span>Set as photo</span></button><button type="button" class="jd-mini jd-mini-ghost" x-show="(bridgePhotoUrl(fieldRow)||``).includes(`/folders/`)" :disabled="{!! $linkExpr !!}.photo_busy === `scan` || photoRowScanBusy({!! $linkExpr !!}, fieldRow)" @click.stop="scanPhotos({!! $linkExpr !!}, fieldRow)" title="This is a Google Drive folder, not a single image - scan it to load its photos into the candidate gallery below, then pick one."><span x-show="photoRowScanBusy({!! $linkExpr !!}, fieldRow)" class="jd-spin jd-spin-dark"></span><span x-text="photoRowScanBusy({!! $linkExpr !!}, fieldRow) ? `Scanning` : `Scan folder`"></span></button>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </template>
-                                                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:2px;font-size:11px;color:#64748b;">
-                                                    <span style="font-weight:700;color:#475569;">Drive folder:</span>
-                                                    <template x-if="galleryFolderUrl({!! $linkExpr !!})"><a :href="galleryFolderUrl({!! $linkExpr !!})" target="_blank" rel="noopener" class="jd-link-lite" style="word-break:break-all;flex:1;min-width:120px;" x-text="galleryFolderUrl({!! $linkExpr !!})"></a></template>
-                                                    <template x-if="!galleryFolderUrl({!! $linkExpr !!})"><span style="color:#94a3b8;flex:1;">none saved</span></template>
-                                                    <button type="button" class="jd-mini jd-mini-ghost" :disabled="{!! $linkExpr !!}.gallery_busy" @click.stop="detectGallery({!! $linkExpr !!})"><span x-show="{!! $linkExpr !!}.gallery_busy===`find`" class="jd-spin jd-spin-dark"></span><span x-text="{!! $linkExpr !!}.gallery_busy===`find` ? `Detecting...` : `Detect`"></span></button>
-                                                    <button type="button" class="jd-mini jd-mini-indigo" :disabled="{!! $linkExpr !!}.gallery_busy" @click.stop="createGallery({!! $linkExpr !!})"><span x-show="{!! $linkExpr !!}.gallery_busy===`create`" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.gallery_busy===`create` ? `Creating...` : `Create`"></span></button>
-                                                </div>
-                                                <div class="jd-inline-status" x-show="{!! $linkExpr !!}.gallery_message" x-text="{!! $linkExpr !!}.gallery_message"></div>
-                                            </div>
-                                        </div>
-                                        <div x-show="photoCandidates({!! $linkExpr !!}).length" style="margin-top:12px;border-top:1px solid #e5e7eb;padding-top:10px;">
-                                            <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:8px;">Candidates &mdash; pick one for the WordPress profile photo</div>
-                                            <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;">
-                                                <template x-for="candidate in photoCandidates({!! $linkExpr !!})" :key="candidate.key || candidate.url">
-                                                    <div style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;background:#fff;display:flex;flex-direction:column;">
-                                                        <div x-data="{ld:false}" style="position:relative;height:130px;background:#f1f5f9;overflow:hidden;"><span x-show="!ld" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"><span class="jd-spin jd-spin-dark" style="width:20px;height:20px;"></span></span><img :src="photoCandidateImageUrl({!! $linkExpr !!}, candidate)" x-on:load="ld=true" x-on:error="handlePhotoCandidateImageError({!! $linkExpr !!}, candidate, $event); ld=true" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;"><span style="position:absolute;top:5px;left:5px;background:rgba(15,23,42,.8);color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em;max-width:88%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" x-text="candidate.source_property || candidate.source_type || `source`"></span></div>
-                                                        <div style="padding:6px 7px;font-size:10px;color:#64748b;line-height:1.35;min-width:0;"><div style="font-weight:700;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="candidate.name || `Image`"></div><div x-text="photoCandidateMeta(candidate)"></div></div>
-                                                        <button type="button" class="jd-mini jd-mini-ok" style="margin:0 7px 7px;justify-content:center;" :disabled="photoMutationBusy({!! $linkExpr !!})" @click.stop="importPhoto({!! $linkExpr !!}, candidate)"><span x-show="{!! $linkExpr !!}.photo_busy===(candidate.key || candidate.url)" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.photo_busy===(candidate.key || candidate.url) ? `Setting` : `Use as profile photo`"></span></button>
-                                                    </div>
-                                                </template>
+                                            <div x-data="{
+                                                activeSourceId(){ return {!! $linkExpr !!}.id || null },
+                                                isBusy(key){ return bridgeMediaBusy({!! $linkExpr !!}, key) },
+                                                notionGalleryPhoto(){ return bridgeMediaGalleryPhoto({!! $linkExpr !!}) },
+                                                notionGalleryKey(photo){ return bridgeMediaGalleryKey({!! $linkExpr !!}, photo) },
+                                                notionGalleryPhotos(photo){ return bridgeMediaGalleryPhotos({!! $linkExpr !!}, photo) },
+                                                notionPhotoRows(){ return bridgeMediaPhotoRows({!! $linkExpr !!}) },
+                                                notionPhotoSources(row){ return bridgeMediaPhotoSources({!! $linkExpr !!}, row) },
+                                                notionPhotoSourceKey(row, photo){ return bridgeMediaPhotoSourceKey({!! $linkExpr !!}, row, photo) },
+                                                notionPhotoCurrentUrl(photo){ return bridgeMediaPhotoCurrentUrl({!! $linkExpr !!}, photo) },
+                                                notionPhotoUrlDraft(photo){ return bridgeMediaPhotoCurrentUrl({!! $linkExpr !!}, photo) },
+                                                setNotionPhotoUrlDraft(photo, value){ return bridgeMediaSetPhotoUrl({!! $linkExpr !!}, photo, value) },
+                                                notionPhotoActionKey(photo, action){ return bridgeMediaPhotoActionKey({!! $linkExpr !!}, photo, action) },
+                                                notionPhotoLooksLikeDriveFolder(photo){ return bridgeMediaPhotoLooksLikeDriveFolder({!! $linkExpr !!}, photo) },
+                                                photoImageUrl(photo){ return bridgeMediaPhotoImageUrl({!! $linkExpr !!}, photo) },
+                                                saveNotionPhotoUrl(photo){ return bridgeMediaSaveNotionPhotoUrl({!! $linkExpr !!}, photo) },
+                                                loadNotionGalleryPhotos(photo){ return bridgeMediaLoadNotionGalleryPhotos({!! $linkExpr !!}, photo) },
+                                                loadAllNotionPhotoSources(){ return scanPhotos({!! $linkExpr !!}) },
+                                                copyNotionPhotoUrl(photo){ return copyText(bridgeMediaPhotoCurrentUrl({!! $linkExpr !!}, photo)) },
+                                                unifiedProfilePhotoCandidates(){ return bridgeMediaUnifiedCandidates({!! $linkExpr !!}) },
+                                                unifiedProfilePhotoSelectedCount(){ return bridgeMediaSelectedCount({!! $linkExpr !!}) },
+                                                selectAllUnifiedProfilePhotoCandidates(){ return bridgeMediaSelectAll({!! $linkExpr !!}) },
+                                                clearUnifiedProfilePhotoSelection(){ return bridgeMediaClearSelection({!! $linkExpr !!}) },
+                                                notionGallerySelected(photo, item){ return bridgeMediaSelected({!! $linkExpr !!}, photo, item) },
+                                                notionGalleryItemMissing(item, photo){ return !!(item && (item._dead || item._preview_failed)) },
+                                                toggleNotionGalleryPhoto(photo, item){ return bridgeMediaToggleSelection({!! $linkExpr !!}, photo, item) },
+                                                galleryItemImageUrl(item){ return photoCandidateImageUrl({!! $linkExpr !!}, item) },
+                                                galleryItemOpenUrl(item){ return bridgeMediaItemOpenUrl(item) },
+                                                galleryPhotoName(item){ return bridgeMediaItemName(item) },
+                                                markDeadGalleryImage(item, event){ return handlePhotoCandidateImageError({!! $linkExpr !!}, item, event) },
+                                                photoNotionField(item, photo){ return bridgeMediaItemNotionField(item, photo) },
+                                                photoResolutionStatus(item, photo){ return bridgeMediaResolutionStatus(item, photo) },
+                                                photoAspectStatus(item, photo){ return bridgeMediaAspectStatus(item, photo) },
+                                                photoSizeText(item, photo){ return bridgeMediaSizeText(item, photo) },
+                                                photoCandidateDetailRows(item, photo){ return bridgeMediaDetailRows(item, photo) },
+                                                photoCandidateWarnings(item){ return bridgeMediaWarnings(item) },
+                                                notionPhotoApplyKey(photo, item){ return bridgeMediaApplyKey({!! $linkExpr !!}, photo, item) },
+                                                applyNotionPhotoToProfile(photo, item = null){ return bridgeMediaApplyPhoto({!! $linkExpr !!}, photo, item) },
+                                                applySelectedUnifiedProfilePhoto(){ return bridgeMediaApplySelected({!! $linkExpr !!}) }
+                                            }" style="min-width:0;">
+                                                @include("notion::partials.media-gallery", [
+                                                    "title" => "Profile photo sources",
+                                                    "intro" => "Edit the Notion photo sources, scan Google Drive folders, and pick one image for the WordPress profile photo.",
+                                                    "fieldTitle" => "Notion photo sources",
+                                                    "fieldNote" => "Each mapped Notion photo field can hold an image URL or a Google Drive folder. Drive folders load into the unified picker.",
+                                                    "candidateTitle" => "Candidates - pick one for the WordPress profile photo",
+                                                    "candidateNote" => "All loaded Notion photo sources and Google Drive folders are combined here. Each card uses the shared Notion media payload.",
+                                                    "emptyCandidateText" => "No candidate photos loaded yet. Scan a Drive folder or use Scan all sources.",
+                                                    "showWordPressGallery" => false,
+                                                    "showDirectPhotoUpload" => false,
+                                                    "showAddToWordPressGallery" => false,
+                                                    "showDirectUrlProfileAction" => true,
+                                                    "showDriveSharingHelper" => false,
+                                                ])
                                             </div>
                                         </div>
                                         <div class="jd-inline-status" x-show="{!! $linkExpr !!}.photo_message" x-text="{!! $linkExpr !!}.photo_message" style="margin-top:8px;"></div>
