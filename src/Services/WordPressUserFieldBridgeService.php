@@ -30,6 +30,19 @@ class WordPressUserFieldBridgeService
         }
 
         $properties = is_array($notionPage["page"]["properties"] ?? null) ? $notionPage["page"]["properties"] : [];
+        if (class_exists(\hexa_package_notion\Services\NotionFieldMediaBridgeService::class)) {
+            try {
+                $rawPage = $this->notion->getPageRaw($notionPageId);
+                if (($rawPage["success"] ?? false) && is_array($rawPage["page"] ?? null)) {
+                    $genericValues = app(\hexa_package_notion\Services\NotionFieldMediaBridgeService::class)
+                        ->flatValuesFromRawPage($rawPage["page"]);
+                    $properties = array_replace($properties, $genericValues);
+                }
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+
         $wpData = is_array($wp["data"] ?? null) ? $wp["data"] : [];
         $rows = [];
 
@@ -196,6 +209,7 @@ class WordPressUserFieldBridgeService
                 "notion_fields" => array_values(array_map("strval", (array) ($target["fields"] ?? ($definition["notion_fields"] ?? [])))),
                 "notion_value" => $notionValue,
                 "wp_field" => $wpField,
+                "wp_aliases" => array_values(array_map("strval", (array) ($definition["wp_aliases"] ?? []))),
                 "wp_type" => (string) ($definition["wp_type"] ?? "native"),
                 "wp_page" => (string) ($definition["wp_page"] ?? "profile.php"),
                 "wp_value" => $wpValue,
@@ -288,7 +302,27 @@ class WordPressUserFieldBridgeService
         }
 
         if ($wpType === "usermeta") {
-            return $this->wordpress->updateUserMeta($target, $userId, $wpField, $value);
+            $result = $this->wordpress->updateUserMeta($target, $userId, $wpField, $value);
+            if (!($result["success"] ?? false)) {
+                return $result;
+            }
+
+            foreach (array_values(array_unique(array_filter(array_map("strval", (array) ($row["wp_aliases"] ?? []))))) as $alias) {
+                $alias = trim($alias);
+                if ($alias === "" || $alias === $wpField) {
+                    continue;
+                }
+
+                $aliasResult = $this->wordpress->updateUserMeta($target, $userId, $alias, $value);
+                if (!($aliasResult["success"] ?? false)) {
+                    return [
+                        "success" => false,
+                        "message" => "Canonical field saved, but legacy alias " . $alias . " failed: " . (string) ($aliasResult["message"] ?? "Unknown error."),
+                    ];
+                }
+            }
+
+            return $result;
         }
 
         return ["success" => false, "message" => "Unsupported WordPress user field type for direct bridge write: " . $wpType];
@@ -311,7 +345,24 @@ class WordPressUserFieldBridgeService
             return $this->stringValue($wpData["avatar_media_id"] ?? $wpData["wp_user_avatar"] ?? "");
         }
 
-        return $this->stringValue($wpData[$field] ?? ($field === "user_email" ? ($wpData["email"] ?? "") : ""));
+        $value = $this->stringValue($wpData[$field] ?? ($field === "user_email" ? ($wpData["email"] ?? "") : ""));
+        if ($value !== "") {
+            return $value;
+        }
+
+        foreach ((array) ($definition["wp_aliases"] ?? []) as $alias) {
+            $alias = trim((string) $alias);
+            if ($alias === "" || $alias === $field) {
+                continue;
+            }
+
+            $aliasValue = $this->stringValue($wpData[$alias] ?? "");
+            if ($aliasValue !== "") {
+                return $aliasValue;
+            }
+        }
+
+        return "";
     }
 
     /**

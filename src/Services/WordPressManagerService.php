@@ -5,6 +5,8 @@ namespace hexa_package_wordpress\Services;
 use hexa_package_wordpress\Acf\AcfSmartTypeResolver;
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Services\WpToolkitService;
+use hexa_package_wordpress\Services\Concerns\ManagesWordPressContent;
+use hexa_package_wordpress\Services\Concerns\ManagesWordPressUsers;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
