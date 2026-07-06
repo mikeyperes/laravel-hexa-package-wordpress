@@ -19,4 +19,6 @@ Route::middleware(['web', 'auth', 'locked', 'system_lock', 'two_factor', 'role',
     Route::post('/wordpress/categories', [WordPressController::class, 'categories'])->name('wordpress.categories');
     Route::post('/wordpress/tags', [WordPressController::class, 'tags'])->name('wordpress.tags');
     Route::post('/wordpress/create-post', [WordPressController::class, 'createPost'])->name('wordpress.create-post');
+    Route::post('/wordpress/acf/education-metadata', [WordPressController::class, 'educationMetadata'])->name('wordpress.acf.education-metadata');
+    Route::post('/wordpress/acf/article-metadata', [WordPressController::class, 'articleMetadata'])->name('wordpress.acf.article-metadata');
 });

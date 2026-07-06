@@ -191,7 +191,153 @@ class AcfRepeaterNormalizer
             return [];
         }
 
+        $key = (string) ($structure['key'] ?? '');
+        if (in_array($key, ['education', 'personal_education'], true)) {
+            return array_map(fn (string $line): array => $this->educationRowFromLine($line, $structure), $this->educationLines($lines));
+        }
+
+        if ($key === 'articles') {
+            return array_map(fn (string $line): array => $this->articleRowFromLine($line, $structure), $lines);
+        }
+
         return array_map(fn (string $line): array => $this->rowFromScalar($line, $structure), $lines);
+    }
+
+    private function educationLines(array $lines): array
+    {
+        $expanded = [];
+        foreach ($lines as $line) {
+            $line = trim((string) $line);
+            if ($line === '') {
+                continue;
+            }
+
+            if (preg_match('/https?:\/\//i', $line)) {
+                $expanded[] = $line;
+                continue;
+            }
+
+            foreach (preg_split('/\s*(?:;|\|)\s*/', $line) ?: [] as $part) {
+                $part = trim((string) $part);
+                if ($part === '') {
+                    continue;
+                }
+
+                $commaParts = array_values(array_filter(array_map('trim', explode(',', $part))));
+                if (count($commaParts) > 1 && $this->allEducationInstitutionNames($commaParts)) {
+                    array_push($expanded, ...$commaParts);
+                    continue;
+                }
+
+                $expanded[] = $part;
+            }
+        }
+
+        return $expanded;
+    }
+
+    private function allEducationInstitutionNames(array $parts): bool
+    {
+        foreach ($parts as $part) {
+            if (! preg_match('/\b(university|college|institute|school|academy|seminary|polytechnic|conservatory|centre|center)\b/i', (string) $part)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function educationRowFromLine(string $line, ?array $structure): array
+    {
+        $row = $this->blankStructuredRow($structure);
+        preg_match_all('/https?:\/\/[^\s,]+/i', $line, $matches);
+        $urls = array_values($matches[0] ?? []);
+        $label = trim(preg_replace('/https?:\/\/[^\s,]+/i', '', $line) ?: $line, " -\t");
+        $wikiUrl = '';
+        foreach ($urls as $url) {
+            if (str_contains(strtolower($url), 'wikipedia.org')) {
+                $wikiUrl = $url;
+                break;
+            }
+        }
+
+        if (array_key_exists('school', $row)) {
+            $row['school'] = $label !== '' ? $label : $line;
+        } elseif (array_key_exists('college', $row)) {
+            $row['college'] = $label !== '' ? $label : $line;
+        } else {
+            $firstKey = array_key_first($row);
+            if ($firstKey !== null) {
+                $row[$firstKey] = $label !== '' ? $label : $line;
+            }
+        }
+
+        if (array_key_exists('url', $row)) {
+            $row['url'] = $urls[0] ?? '';
+        }
+        if (array_key_exists('wikipedia_url', $row)) {
+            $row['wikipedia_url'] = $wikiUrl;
+        }
+        if (array_key_exists('wiki_url', $row)) {
+            $row['wiki_url'] = $wikiUrl;
+        }
+        if (array_key_exists('same_as', $row)) {
+            $row['same_as'] = implode("\n", array_values(array_filter($urls, fn (string $url): bool => $url !== ($urls[0] ?? ''))));
+        }
+
+        return $row;
+    }
+
+    private function articleRowFromLine(string $line, ?array $structure): array
+    {
+        $row = $this->blankStructuredRow($structure);
+        preg_match_all('/https?:\/\/[^\s,]+/i', $line, $matches);
+        $urls = array_values($matches[0] ?? []);
+        $url = $urls[0] ?? '';
+        $title = trim(preg_replace('/https?:\/\/[^\s,]+/i', '', $line) ?: '', " -\t|");
+        $host = $url !== '' ? strtolower((string) (parse_url($url, PHP_URL_HOST) ?: '')) : '';
+        $source = preg_replace('/^www\./', '', $host) ?: '';
+
+        if ($title === '' && $url !== '') {
+            $path = trim((string) (parse_url($url, PHP_URL_PATH) ?: ''), '/');
+            $slug = basename($path);
+            $slug = preg_replace('/\.[a-z0-9]+$/i', '', $slug) ?: $slug;
+            $title = trim(ucwords(str_replace(['-', '_'], ' ', $slug))) ?: $url;
+        }
+
+        if (array_key_exists('title', $row)) {
+            $row['title'] = $title !== '' ? $title : $line;
+        } else {
+            $firstKey = array_key_first($row);
+            if ($firstKey !== null) {
+                $row[$firstKey] = $title !== '' ? $title : $line;
+            }
+        }
+        if (array_key_exists('source', $row)) {
+            $row['source'] = $source;
+        }
+        if (array_key_exists('url', $row)) {
+            $row['url'] = $url;
+        }
+
+        return $row;
+    }
+
+    private function blankStructuredRow(?array $structure): array
+    {
+        $row = [];
+        foreach ((array) ($structure['fields'] ?? []) as $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+
+            $name = (string) ($field['name'] ?? '');
+            if ($name !== '') {
+                $row[$name] = '';
+            }
+        }
+
+        return $row !== [] ? $row : ['value' => ''];
     }
 
     private function rowFromScalar(mixed $value, ?array $structure): array

@@ -151,19 +151,6 @@
                                                             </div>
                                                         </div>
                                                     </div>
-                                                    <div class="jd-bridge-photo-row" x-show="fieldRow.is_photo_bridge" data-journalist-photo-bridge-row>
-                                                        <div class="jd-photo-card" :class="bridgePhotoUrl(fieldRow) ? `` : `is-empty`">
-                                                            <div class="jd-photo-thumb-wrap"><template x-if="bridgePhotoUrl(fieldRow)"><img class="jd-photo-thumb" :src="bridgePhotoUrl(fieldRow)" alt="" loading="lazy" x-on:error="markDeadBridgePhoto(fieldRow, {!! $linkExpr !!}, $event)"></template><template x-if="!bridgePhotoUrl(fieldRow)"><div class="jd-current-photo-empty" x-text="fieldRow.notion_label || fieldRow.notion_field || `Photo`"></div></template></div>
-                                                            <div class="jd-photo-card-title" x-text="fieldRow.notion_label || fieldRow.notion_field || fieldRow.label"></div>
-                                                            <div class="jd-photo-card-meta" x-text="bridgePhotoUrl(fieldRow) ? `Notion source: ${fieldRow.notion_field || fieldRow.notion_label}` : `No URL currently stored in this editable Notion photo field.`"></div>
-                                                            <a class="jd-link-lite" x-show="bridgePhotoUrl(fieldRow)" :href="bridgePhotoUrl(fieldRow)" target="_blank" rel="noopener noreferrer" x-text="bridgePhotoUrl(fieldRow)"></a>
-                                                            <div class="jd-photo-actions">
-                                                                <button type="button" class="jd-mini jd-mini-ok" :disabled="photoMutationBusy({!! $linkExpr !!}) || !bridgePhotoUrl(fieldRow)" :title="!bridgePhotoUrl(fieldRow) ? `Disabled because this Notion photo column has no URL to import.` : (photoMutationBusy({!! $linkExpr !!}) ? disabledTitle({!! $linkExpr !!}) : `Import this Notion photo as the WordPress profile photo`)" @click.stop="importPhoto({!! $linkExpr !!}, bridgePhotoCandidate(fieldRow))"><span x-show="{!! $linkExpr !!}.photo_busy===fieldRow.key" class="jd-spin"></span><span>Use as WP Profile Photo</span></button>
-                                                                <button type="button" class="jd-mini jd-mini-ghost" :disabled="photoMutationBusy({!! $linkExpr !!}) || !bridgePhotoUrl(fieldRow)" :title="!bridgePhotoUrl(fieldRow) ? `Disabled because this row has no photo URL to save.` : (photoMutationBusy({!! $linkExpr !!}) ? disabledTitle({!! $linkExpr !!}) : `Write this URL into ${fieldRow.notion_field || fieldRow.notion_label}`)" @click.stop="savePhotoToNotion({!! $linkExpr !!}, bridgePhotoCandidate(fieldRow), fieldRow.notion_field || fieldRow.notion_label)"><span x-show="{!! $linkExpr !!}.photo_busy===(`notion:` + fieldRow.key)" class="jd-spin jd-spin-dark"></span><span>Save URL to Notion</span></button>
-                                                                <label class="jd-mini jd-mini-indigo" :title="photoMutationBusy({!! $linkExpr !!}) ? disabledTitle({!! $linkExpr !!}) : `Upload a local image to WordPress and save the uploaded URL to this Notion column`" :style="photoMutationBusy({!! $linkExpr !!}) ? `opacity:.55;cursor:default` : ``" @click.stop><span x-show="{!! $linkExpr !!}.photo_busy===`upload`" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.photo_busy===`upload` ? `Uploading...` : `Upload to this column`"></span><input type="file" accept="image/*" style="display:none" :disabled="photoMutationBusy({!! $linkExpr !!})" @change="uploadPhotoFile({!! $linkExpr !!}, $event, fieldRow.notion_field || fieldRow.notion_label)"></label>
-                                                            </div>
-                                                        </div>
-                                                    </div>
                                                     <div class="jd-sfpf-field-actions">
                                                         <div class="jd-field-save-status" x-show="fieldRow.save_status" x-cloak :class="fieldRow.save_status">
                                                             <span x-show="fieldRow.save_status === `saving`" class="jd-spin jd-spin-dark"></span>
@@ -221,16 +208,14 @@
                                             <div x-show="{!! $linkExpr !!}.photo_message"><b>Status:</b> <span x-text="{!! $linkExpr !!}.photo_message"></span></div>
                                         </div>
                                         <div x-show="open" x-cloak class="jd-profile-photo-body">
-                                        <div style="display:grid;grid-template-columns:minmax(160px,200px) minmax(0,1fr);gap:14px;align-items:start;">
-                                            <div style="border:1px solid #e5e7eb;border-radius:12px;background:#fff;padding:10px;">
-                                                <div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:6px;">On WordPress now</div>
-                                                <div style="height:140px;border-radius:10px;background:#f8fafc;border:1px solid #eef2f7;display:flex;align-items:center;justify-content:center;overflow:hidden;">
-                                                    <template x-if="profilePhotoUrl({!! $linkExpr !!})"><img :src="profilePhotoUrl({!! $linkExpr !!})" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" x-on:error="markDeadProfilePhoto({!! $linkExpr !!}, $event)"></template>
-                                                    <template x-if="!profilePhotoUrl({!! $linkExpr !!})"><div style="width:64px;height:64px;border-radius:999px;background:#e0e7ff;color:#3730a3;font-weight:700;font-size:20px;display:flex;align-items:center;justify-content:center;" x-text="profilePhotoInitials({!! $linkExpr !!})"></div></template>
-                                                </div>
-                                                <div style="margin-top:8px;font-size:11px;color:#64748b;line-height:1.5;"><span x-text="profilePhotoUrl({!! $linkExpr !!}) ? `Profile photo set` : `No profile photo set`"></span><br><span x-text="profilePhotoSource({!! $linkExpr !!})"></span></div>
-                                            </div>
                                             <div x-data="{
+                                                notionMediaConfig:{
+                                                    hooks:{
+                                                        detectOnlineImage:(payload = {}) => detectBridgeOnlineImage({!! $linkExpr !!}, payload || {}),
+                                                        uploadMediaFile:(payload = {}) => uploadBridgeMediaFile({!! $linkExpr !!}, payload || {}),
+                                                        uploadFieldPhoto:(payload = {}) => uploadBridgeMediaFile({!! $linkExpr !!}, payload || {})
+                                                    }
+                                                },
                                                 activeSourceId(){ return {!! $linkExpr !!}.id || null },
                                                 isBusy(key){ return bridgeMediaBusy({!! $linkExpr !!}, key) },
                                                 notionGalleryPhoto(){ return bridgeMediaGalleryPhoto({!! $linkExpr !!}) },
@@ -271,34 +256,23 @@
                                                 applySelectedUnifiedProfilePhoto(){ return bridgeMediaApplySelected({!! $linkExpr !!}) }
                                             }" style="min-width:0;">
                                                 @include("notion::partials.media-gallery", [
-                                                    "title" => "Profile photo sources",
-                                                    "intro" => "Edit the Notion photo sources, scan Google Drive folders, and pick one image for the WordPress profile photo.",
+                                                    "title" => "Generic profile photo gallery bridge",
+                                                    "intro" => "Reusable gallery bridge for Notion photo sources, Google Drive folders, online image detection, upload, and profile photo selection.",
                                                     "fieldTitle" => "Notion photo sources",
                                                     "fieldNote" => "Each mapped Notion photo field can hold an image URL or a Google Drive folder. Drive folders load into the unified picker.",
                                                     "candidateTitle" => "Candidates - pick one for the WordPress profile photo",
-                                                    "candidateNote" => "All loaded Notion photo sources and Google Drive folders are combined here. Each card uses the shared Notion media payload.",
-                                                    "emptyCandidateText" => "No candidate photos loaded yet. Scan a Drive folder or use Scan all sources.",
+                                                    "candidateNote" => "All loaded Notion photo sources, uploaded images, detected online images, and Google Drive folders are combined here.",
+                                                    "emptyCandidateText" => "No candidate photos loaded yet. Scan a Drive folder, detect an online image, or upload an image.",
                                                     "showWordPressGallery" => false,
-                                                    "showDirectPhotoUpload" => false,
+                                                    "showDirectPhotoUpload" => true,
                                                     "showAddToWordPressGallery" => false,
                                                     "showDirectUrlProfileAction" => true,
                                                     "showDriveSharingHelper" => false,
+                                                    "showOnlineImageDetector" => true,
+                                                    "showGenericUploadDropzone" => true,
+                                                    "showGenericMediaActivity" => true,
                                                 ])
                                             </div>
-                                        </div>
-                                        <div class="jd-inline-status" x-show="{!! $linkExpr !!}.photo_message" x-text="{!! $linkExpr !!}.photo_message" style="margin-top:8px;"></div>
-                                        <div class="jd-photo-step-log" x-show="photoSteps({!! $linkExpr !!}).length" x-cloak>
-                                            <template x-for="step in photoSteps({!! $linkExpr !!})" :key="step.label">
-                                                <div class="jd-photo-step" :class="photoStepClass(step)">
-                                                    <span class="jd-photo-step-icon" aria-hidden="true">
-                                                        <span x-show="step.state==&quot;working&quot;" class="jd-spin jd-spin-dark" style="width:12px;height:12px;"></span>
-                                                        <span x-show="step.state!=&quot;working&quot;" x-text="photoStepIcon(step)"></span>
-                                                    </span>
-                                                    <span class="jd-photo-step-label" x-text="step.label"></span>
-                                                    <span class="jd-photo-step-message" x-show="step.message" x-text="step.message"></span>
-                                                </div>
-                                            </template>
-                                        </div>
                                         </div>
                                     </div>
                                     <div class="jd-sfpf-actions" data-testid="journalist-sfpf-field-actions">

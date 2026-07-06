@@ -37,9 +37,25 @@ class AcfStructureRegistry
             return null;
         }
 
-        foreach (self::definitions() as $key => $structure) {
+        $definitions = self::definitions();
+
+        foreach ($tokens as $token) {
+            if ($token !== '' && isset($definitions[$token])) {
+                return $definitions[$token];
+            }
+        }
+
+        foreach ($definitions as $structure) {
+            $fieldKey = self::normalizeIdentifier((string) ($structure['field_key'] ?? ''));
+            foreach ($tokens as $token) {
+                if ($token !== '' && $fieldKey !== '' && $token === $fieldKey) {
+                    return $structure;
+                }
+            }
+        }
+
+        foreach ($definitions as $key => $structure) {
             $matches = array_map([self::class, 'normalizeIdentifier'], array_merge(
-                [$key, (string) ($structure['field_key'] ?? '')],
                 (array) ($structure['aliases'] ?? [])
             ));
 
@@ -143,26 +159,23 @@ class AcfStructureRegistry
             ], ['aliases' => ['profession']]),
 
             'education' => self::repeater('education', 'Education', [
-                self::field('college', 'College'),
+                self::field('college', 'College', 'text', ['school', 'institution', 'name', 'value']),
                 self::field('wiki_url', 'Wikipedia URL', 'url', ['wikipedia_url']),
                 self::field('year', 'Year'),
-                self::field('designation', 'Designation'),
-                self::field('major', 'Major'),
-            ], ['aliases' => ['schools', 'academic_background']]),
+                self::field('designation', 'Designation', 'text', ['degree']),
+                self::field('major', 'Major', 'text', ['field_of_study']),
+            ], ['aliases' => ['schools', 'academic_background', 'personal_education', 'field_smp_vp_personal_education']]),
 
-            'personal_education' => self::repeater('personal_education', 'Personal Education', [
-                self::field('school', 'School', 'text', ['field_smp_vp_personal_education_school']),
-                self::field('degree', 'Degree', 'text', ['field_smp_vp_personal_education_degree']),
-                self::field('field_of_study', 'Field Of Study', 'text', ['field_smp_vp_personal_education_field_of_study']),
-                self::field('start_date', 'Start Date', 'date', ['field_smp_vp_personal_education_start_date']),
-                self::field('end_date', 'End Date', 'date', ['field_smp_vp_personal_education_end_date']),
-                self::field('url', 'URL', 'url', ['field_smp_vp_personal_education_url']),
-                self::field('wikipedia_url', 'Wikipedia URL', 'url', ['field_smp_vp_personal_education_wikipedia_url']),
-                self::field('same_as', 'Same As', 'url', ['field_smp_vp_personal_education_same_as']),
-                self::field('description', 'Description', 'textarea', ['field_smp_vp_personal_education_description']),
+            'personal_education' => self::repeater('personal_education', 'Education', [
+                self::field('college', 'College', 'text', ['school', 'institution', 'name', 'value', 'field_smp_vp_personal_education_school']),
+                self::field('wiki_url', 'Wikipedia URL', 'url', ['wikipedia_url', 'field_smp_vp_personal_education_wikipedia_url']),
+                self::field('year', 'Year', 'text', ['start_date', 'end_date']),
+                self::field('designation', 'Designation', 'text', ['degree', 'field_smp_vp_personal_education_degree']),
+                self::field('major', 'Major', 'text', ['field_of_study', 'field_smp_vp_personal_education_field_of_study']),
             ], [
-                'aliases' => ['field_smp_vp_personal_education'],
+                'aliases' => ['field_smp_vp_personal_education', 'schools', 'academic_background'],
                 'field_key' => 'field_smp_vp_personal_education',
+                'canonical_key' => 'education',
             ]),
 
             'articles' => self::repeater('articles', 'Articles', [
