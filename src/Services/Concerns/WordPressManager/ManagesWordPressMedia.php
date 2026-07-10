@@ -4,7 +4,6 @@ namespace hexa_package_wordpress\Services\Concerns\WordPressManager;
 
 use hexa_package_wordpress\Acf\AcfSmartTypeResolver;
 use hexa_package_whm\Models\WhmServer;
-use hexa_package_wptoolkit\Services\WpToolkitService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -385,4 +384,5 @@ trait ManagesWordPressMedia
         }
         return "";
     }
+
 }
