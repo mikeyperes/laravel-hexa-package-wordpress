@@ -27,4 +27,14 @@ class FrontendArchitectureTest extends TestCase
         $this->assertStringContainsString("wordpress::raw.scripts", $view);
         $this->assertStringNotContainsString('function wpTestConnection()', $view);
     }
+
+    public function test_user_field_bridge_exposes_optional_company_photo_picker(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $panel = (string) file_get_contents($root . '/resources/views/user-field-bridge/panel.blade.php');
+
+        $this->assertStringContainsString('showCompanyPhotoPicker', $panel);
+        $this->assertStringContainsString('data-journalist-action="pick-company-photos"', $panel);
+        $this->assertStringContainsString('scanCompanyPhotos', $panel);
+    }
 }
