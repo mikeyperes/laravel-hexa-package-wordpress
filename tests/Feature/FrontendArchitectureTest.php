@@ -3,6 +3,7 @@
 namespace HexaPackageSmokeTests\LaravelHexaPackageWordpress;
 
 use hexa_core\Support\PackageAssetRegistry;
+use hexa_package_wordpress\Services\WordPressUserDeletionService;
 use Tests\TestCase;
 
 class FrontendArchitectureTest extends TestCase
@@ -17,6 +18,22 @@ class FrontendArchitectureTest extends TestCase
             '/@json|\{\{|\}\}|@(?:if|foreach|php|route)\b/',
             (string) file_get_contents($assets['raw.js'])
         );
+    }
+
+    public function test_user_deletion_service_and_frontend_are_owned_by_wordpress_package(): void
+    {
+        $assets = app(PackageAssetRegistry::class)->assetsFor('wordpress');
+        $root = dirname(__DIR__, 2);
+        $view = (string) file_get_contents($root . '/resources/views/user-deletion/reassignment-selector.blade.php');
+        $javascript = (string) file_get_contents($assets['user-deletion.js']);
+
+        $this->assertInstanceOf(WordPressUserDeletionService::class, app(WordPressUserDeletionService::class));
+        $this->assertArrayHasKey('user-deletion.js', $assets);
+        $this->assertStringContainsString('Assign all existing content to', $view);
+        $this->assertStringContainsString('x-hexa-smart-search', $view);
+        $this->assertStringContainsString('HexaWordPressUserDeletion', $javascript);
+        $this->assertStringContainsString('alpineMethods', $javascript);
+        $this->assertStringNotContainsString('journalist', strtolower($javascript));
     }
 
     public function test_raw_view_delegates_workflow_to_registered_asset(): void

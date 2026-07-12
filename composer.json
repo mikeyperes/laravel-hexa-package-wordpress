@@ -2,7 +2,7 @@
     "name": "hexawebsystems/laravel-hexa-package-wordpress",
     "description": "WordPress \u2014 REST API connector for post management, site configuration, and remote content publishing.",
     "type": "library",
-    "version": "2.0.39",
+    "version": "2.0.41",
     "license": "proprietary",
     "require": {
         "php": "^8.2",
