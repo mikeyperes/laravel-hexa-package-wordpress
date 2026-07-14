@@ -1,4 +1,8 @@
-@php $linkExpr = $linkExpr ?? "row.link"; @endphp
+@php
+    $linkExpr = $linkExpr ?? "row.link";
+    $showCompanyPhotoPicker = (bool) ($showCompanyPhotoPicker ?? false);
+    $showProfilePhotoWithoutFields = (bool) ($showProfilePhotoWithoutFields ?? false);
+@endphp
 {{-- Shared WordPress user field bridge panel using the SFPF audit field-workspace interaction model. --}}
                         <div class="jd-field jd-field-gate jd-sfpf-bridge">
                             <div class="jd-tool-head jd-sfpf-bridge-head">
@@ -182,7 +186,7 @@
                                             </div>
                                         </template>
                                     </div>
-                                    <div class="jd-profile-photo-card jd-bridge-profile-photo-card" :class="profilePhotoCardClass({!! $linkExpr !!})" x-show="bridgePhotoRows({!! $linkExpr !!}).length" x-data="{ open: !profilePhotoBridgeDone({!! $linkExpr !!}) }" x-init="$nextTick(() => { if(!{!! $linkExpr !!}.photo_scanned_once && bridgePhotoRows({!! $linkExpr !!}).length){ {!! $linkExpr !!}.photo_scanned_once = true; scanPhotos({!! $linkExpr !!}); } })" x-effect="if(profilePhotoBridgeDone({!! $linkExpr !!})){ open=false } else if(profilePhotoBridgeHasError({!! $linkExpr !!})){ open=true }" data-journalist-profile-photo-bridge>
+                                    <div class="jd-profile-photo-card jd-bridge-profile-photo-card" :class="profilePhotoCardClass({!! $linkExpr !!})" @if(!$showProfilePhotoWithoutFields) x-show="bridgePhotoRows({!! $linkExpr !!}).length" @endif x-data="{ open: !profilePhotoBridgeDone({!! $linkExpr !!}) }" x-init="$nextTick(() => { if(!{!! $linkExpr !!}.photo_scanned_once && bridgePhotoRows({!! $linkExpr !!}).length){ {!! $linkExpr !!}.photo_scanned_once = true; scanPhotos({!! $linkExpr !!}); } })" x-effect="if(profilePhotoBridgeDone({!! $linkExpr !!})){ open=false } else if(profilePhotoBridgeHasError({!! $linkExpr !!})){ open=true }" data-journalist-profile-photo-bridge>
                                         <div class="jd-profile-photo-head">
                                             <div class="jd-sfpf-field-title-block"><span x-show="profilePhotoBridgeDone({!! $linkExpr !!})" class="jd-sfpf-done-icon">✓</span><div><div class="jd-profile-photo-title">Profile photo</div><div class="jd-profile-photo-note">Edit the Notion photo sources, paste image or Drive URLs, then pick any image to set the WordPress profile photo. Drive folders load into the candidate gallery on Scan.</div></div></div>
                                             <div class="jd-sfpf-field-meta">
@@ -197,6 +201,9 @@
                                                     <a href="{{ route('google-drive.photo-renamer') }}" target="_blank" rel="noopener" class="jd-mini jd-mini-ghost" @click.stop>Photo renamer <span aria-hidden="true">&#8599;</span></a>
                                                 @else
                                                     <a href="/google-drive/photo-renamer" target="_blank" rel="noopener" class="jd-mini jd-mini-ghost" @click.stop>Photo renamer <span aria-hidden="true">&#8599;</span></a>
+                                                @endif
+                                                @if($showCompanyPhotoPicker)
+                                                    <button type="button" class="jd-mini jd-mini-ghost" :disabled="photoScanBusy({!! $linkExpr !!})" @click.stop="scanCompanyPhotos({!! $linkExpr !!})" data-journalist-action="pick-company-photos"><span x-show="photoBusyValue({!! $linkExpr !!})===`scan-master`" class="jd-spin jd-spin-dark"></span><span x-text="photoBusyValue({!! $linkExpr !!})===`scan-master` ? `Loading company photos...` : `Pick from company photos`"></span></button>
                                                 @endif
                                                 <button type="button" class="jd-mini jd-mini-ghost" :disabled="photoScanBusy({!! $linkExpr !!})" @click.stop="scanPhotos({!! $linkExpr !!})" data-journalist-action="load-bridge-folder-photos"><span x-show="photoScanBusy({!! $linkExpr !!})" class="jd-spin jd-spin-dark"></span><span x-text="photoScanBusy({!! $linkExpr !!}) ? `Scanning...` : `Scan all sources`"></span></button>
                                                 <label class="jd-mini jd-mini-indigo" :style="photoMutationBusy({!! $linkExpr !!}) ? `opacity:.55;cursor:default` : ``" @click.stop data-journalist-action="upload-bridge-profile-photo"><span x-show="{!! $linkExpr !!}.photo_busy===`upload`" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.photo_busy===`upload` ? `Uploading...` : `Upload`"></span><input type="file" accept="image/*" style="display:none" :disabled="photoMutationBusy({!! $linkExpr !!})" @change="uploadPhotoFile({!! $linkExpr !!}, $event, bridgeDefaultPhotoField({!! $linkExpr !!}))"></label>

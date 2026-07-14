@@ -148,6 +148,6 @@
 </div>
 
 @push('scripts')
-<script>@include('wordpress::scripts.raw-index.block-1-part-1')</script>
+    @include('wordpress::raw.scripts')
 @endpush
 @endsection

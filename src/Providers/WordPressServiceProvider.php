@@ -11,8 +11,10 @@ use hexa_package_wordpress\Services\WordPressManagerService;
 use hexa_package_wordpress\Services\WordPressPluginIntegrityService;
 use hexa_package_wordpress\Services\WordPressService;
 use hexa_package_wordpress\Services\WordPressUserFieldBridgeService;
+use hexa_package_wordpress\Services\WordPressUserDeletionService;
 use hexa_package_wordpress\Services\WordPressUserFieldMap;
 use hexa_core\Services\PackageRegistryService;
+use hexa_core\Support\PackageAssetRegistry;
 
 /**
  * WordPressServiceProvider — registers WordPress package services, routes, views.
@@ -33,6 +35,7 @@ class WordPressServiceProvider extends ServiceProvider
         $this->app->singleton(WordPressManagerService::class);
         $this->app->singleton(WordPressPluginIntegrityService::class);
         $this->app->singleton(WordPressUserFieldBridgeService::class);
+        $this->app->singleton(WordPressUserDeletionService::class);
         $this->app->singleton(WordPressUserFieldMap::class);
     }
 
@@ -45,6 +48,11 @@ class WordPressServiceProvider extends ServiceProvider
     {
         $this->loadRoutesFrom(__DIR__ . '/../../routes/wordpress.php');
         $this->loadViewsFrom(__DIR__ . '/../../resources/views', 'wordpress');
+
+        app(PackageAssetRegistry::class)->register('wordpress', dirname(__DIR__, 2) . '/resources/js', [
+            'raw.js',
+            'user-deletion.js',
+        ]);
 
         // Sidebar links — registered via PackageRegistryService with auto permission checks
         if (!config('hexa.app_controls_sidebar', false)) {

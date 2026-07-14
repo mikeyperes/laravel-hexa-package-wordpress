@@ -1,5 +1,5 @@
-
-const CSRF_TOKEN = '{{ csrf_token() }}';
+const wordpressRawConfig = JSON.parse(document.getElementById('wordpress-raw-config').textContent);
+const CSRF_TOKEN = wordpressRawConfig.csrfToken;
 const SPINNER_SVG = '<svg class="animate-spin h-4 w-4 inline mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>';
 
 function setButtonLoading(btn, loadingText) {
@@ -51,7 +51,7 @@ function wpTestConnection() {
     body.append('username', creds.username);
     body.append('app_password', creds.app_password);
 
-    fetch('{{ route("wordpress.test-connection") }}', { method: 'POST', body: body })
+    fetch(wordpressRawConfig.routes.testConnection, { method: 'POST', body: body })
         .then(function(r) { return r.json(); })
         .then(function(data) {
             var html = resultBanner(data.success, data.message);
@@ -87,7 +87,7 @@ function wpGetCategories() {
     body.append('username', creds.username);
     body.append('app_password', creds.app_password);
 
-    fetch('{{ route("wordpress.categories") }}', { method: 'POST', body: body })
+    fetch(wordpressRawConfig.routes.categories, { method: 'POST', body: body })
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.success && data.data && data.data.length) {
@@ -134,7 +134,7 @@ function wpGetTags() {
     body.append('username', creds.username);
     body.append('app_password', creds.app_password);
 
-    fetch('{{ route("wordpress.tags") }}', { method: 'POST', body: body })
+    fetch(wordpressRawConfig.routes.tags, { method: 'POST', body: body })
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.success && data.data && data.data.length) {
@@ -193,7 +193,7 @@ function wpCreatePost() {
     body.append('content', content);
     body.append('status', status);
 
-    fetch('{{ route("wordpress.create-post") }}', { method: 'POST', body: body })
+    fetch(wordpressRawConfig.routes.createPost, { method: 'POST', body: body })
         .then(function(r) { return r.json(); })
         .then(function(data) {
             var html = resultBanner(data.success, data.message);
