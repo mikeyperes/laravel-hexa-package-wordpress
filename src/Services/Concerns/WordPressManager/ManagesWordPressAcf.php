@@ -200,4 +200,5 @@ trait ManagesWordPressAcf
 
         return $typed;
     }
+
 }

@@ -228,6 +228,18 @@ PHP;
 
     private function normalizeUserRow(array $user): array
     {
+        $simpleAvatarPayload = $user["simple_local_avatar"] ?? "";
+        $avatarPayload = $simpleAvatarPayload ?: ($user["wp_user_avatars"] ?? "");
+        $avatarUrl = (string) ($user["avatar_url"] ?? "");
+        if ($avatarUrl === "") {
+            $avatarUrl = $this->extractUserAvatarUrl($avatarPayload);
+        }
+        $avatarMediaId = (string) (
+            $user["avatar_media_id"]
+            ?? $this->extractUserAvatarMediaId($simpleAvatarPayload)
+            ?: ($user["wp_user_avatar"] ?? "")
+        );
+
         return [
             "id" => (int) ($user["id"] ?? $user["ID"] ?? 0),
             "ID" => (int) ($user["ID"] ?? $user["id"] ?? 0),
@@ -235,6 +247,11 @@ PHP;
             "display_name" => (string) ($user["display_name"] ?? $user["name"] ?? ""),
             "user_email" => (string) ($user["user_email"] ?? $user["email"] ?? ""),
             "roles" => array_values(array_map("strval", (array) ($user["roles"] ?? []))),
+            "wp_user_avatar" => (string) ($user["wp_user_avatar"] ?? ""),
+            "wp_user_avatars" => is_scalar($avatarPayload) ? (string) $avatarPayload : serialize($avatarPayload),
+            "simple_local_avatar" => is_scalar($simpleAvatarPayload) ? (string) $simpleAvatarPayload : serialize($simpleAvatarPayload),
+            "avatar_media_id" => $avatarMediaId,
+            "avatar_url" => $avatarUrl,
         ];
     }
 
@@ -290,4 +307,5 @@ PHP;
 
         return filter_var($url, FILTER_VALIDATE_URL) ? $url : "";
     }
+
 }

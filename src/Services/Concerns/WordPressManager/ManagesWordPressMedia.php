@@ -385,4 +385,5 @@ trait ManagesWordPressMedia
         }
         return "";
     }
+
 }

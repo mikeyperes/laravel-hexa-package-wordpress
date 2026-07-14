@@ -1,24 +1,28 @@
 {
-    "name": "hexawebsystems/laravel-hexa-package-wordpress",
-    "description": "WordPress \u2014 REST API connector for post management, site configuration, and remote content publishing.",
-    "type": "library",
-    "version": "0.1.25",
-    "license": "proprietary",
-    "require": {
-        "php": "^8.2"
-    },
-    "autoload": {
-        "psr-4": {
-            "hexa_package_wordpress\\": "src/"
-        }
-    },
-    "extra": {
-        "laravel": {
-            "providers": [
-                "hexa_package_wordpress\\Providers\\WordPressServiceProvider"
-            ]
-        }
-    },
-    "minimum-stability": "dev",
-    "prefer-stable": true
+  "name": "hexawebsystems/laravel-hexa-package-wordpress",
+  "description": "WordPress — REST API connector for post management, site configuration, and remote content publishing.",
+  "type": "library",
+  "version": "0.1.26",
+  "license": "proprietary",
+  "require": {
+    "php": "^8.2",
+    "hexawebsystems/laravel-hexa-package-whm": "*",
+    "hexawebsystems/laravel-hexa-package-wptoolkit": "*",
+    "hexawebsystems/laravel-hexa-package-notion": "*",
+    "hexawebsystems/laravel-hexa-package-user-roles": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "hexa_package_wordpress\\": "src/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "hexa_package_wordpress\\Providers\\WordPressServiceProvider"
+      ]
+    }
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true
 }

@@ -267,4 +267,5 @@ trait ManagesWordPressTaxonomies
             "term_details" => $details,
         ];
     }
+
 }

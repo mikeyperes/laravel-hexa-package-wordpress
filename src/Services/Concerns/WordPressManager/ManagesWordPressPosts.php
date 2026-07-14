@@ -236,4 +236,6 @@ trait ManagesWordPressPosts
         }, $items);
         return ["success" => (bool) ($response["success"] ?? false), "message" => ($response["success"] ?? false) ? "Media loaded via REST." : (string) ($response["message"] ?? "Media list failed."), "items" => $items, "data" => $items];
     }
+
+
 }

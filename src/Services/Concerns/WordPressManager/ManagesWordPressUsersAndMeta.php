@@ -31,12 +31,28 @@ trait ManagesWordPressUsersAndMeta
             foreach ((array) (json_decode((string) ($meta["stdout"] ?? "[]"), true) ?: []) as $row) {
                 if (is_array($row)) $data[(string) ($row["meta_key"] ?? "")] = (string) ($row["meta_value"] ?? "");
             }
-            if (empty($data["avatar_url"]) && !empty($data["wp_user_avatars"])) {
-                foreach (explode(chr(34), $data["wp_user_avatars"]) as $part) {
-                    if (str_starts_with($part, "http")) { $data["avatar_url"] = $part; break; }
+            if (empty($data["avatar_url"]) && !empty($data["simple_local_avatar"])) {
+                $payloadUrl = $this->extractUserAvatarUrl($data["simple_local_avatar"]);
+                if ($payloadUrl !== "") {
+                    $data["avatar_url"] = $payloadUrl;
                 }
             }
-            $data["avatar_media_id"] = (string) ($data["wp_user_avatar"] ?? "");
+            if (empty($data["avatar_url"]) && !empty($data["wp_user_avatars"])) {
+                $payloadUrl = $this->extractUserAvatarUrl($data["wp_user_avatars"]);
+                if ($payloadUrl !== "") {
+                    $data["avatar_url"] = $payloadUrl;
+                }
+            }
+            $data["avatar_media_id"] = (string) (
+                $this->extractUserAvatarMediaId($data["simple_local_avatar"] ?? "")
+                ?: ($data["wp_user_avatar"] ?? "")
+            );
+            if (empty($data["avatar_url"]) && !empty($data["wp_user_avatar"])) {
+                $url = $this->wpCliAttachmentUrl($target, (int) $data["wp_user_avatar"]);
+                if ($url !== "") {
+                    $data["avatar_url"] = $url;
+                }
+            }
         }
         $data["ID"] = (string) $userId;
         $data["wp_admin_url"] = "/wp-admin/user-edit.php?user_id=" . $userId;
@@ -53,18 +69,37 @@ trait ManagesWordPressUsersAndMeta
         $before = $this->getUserProfile($target, $userId);
         $previous = (int) (($before["data"]["wp_user_avatar"] ?? $before["data"]["avatar_media_id"] ?? 0));
         $mediaId = $mediaId !== null && $mediaId > 0 ? (int) $mediaId : 0;
-        $command = $mediaId > 0 ? "user meta update " . $userId . " wp_user_avatar " . $mediaId : "user meta delete " . $userId . " wp_user_avatar";
-        $result = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], $command);
         if ($mediaId > 0) {
             $url = $this->wpCliAttachmentUrl($target, $mediaId);
-            $payload = serialize(["media_id" => $mediaId, "site_id" => 1, "full" => $url, 96 => $url]);
-            $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta update " . $userId . " wp_user_avatars " . escapeshellarg($payload));
+            if ($url === "") {
+                return ["success" => false, "message" => "WordPress attachment URL was not found for media #" . $mediaId . ".", "media" => null];
+            }
+            $avatarMetaResult = $this->writeUserAvatarPayload($target, $userId, $mediaId, $url);
         } else {
-            $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta delete " . $userId . " wp_user_avatars");
+            $avatarMetaResult = $this->writeUserAvatarPayload($target, $userId, 0, "");
+        }
+        if (!($avatarMetaResult["success"] ?? false)) {
+            return [
+                "success" => false,
+                "message" => (string) ($avatarMetaResult["message"] ?? "WordPress avatar payload update failed."),
+                "media" => null,
+                "avatar_result" => $avatarMetaResult,
+            ];
+        }
+        if ($mediaId > 0 && (string) ($avatarMetaResult["stored_type"] ?? "") !== "array") {
+            return ["success" => false, "message" => "WordPress avatar plugin payload did not persist as an array.", "media" => null];
         }
         if ($deletePreviousMedia && $previous > 0 && $previous !== $mediaId) $this->deleteMedia($target, $previous, true);
-        $profile = $this->getUserProfile($target, $userId);
-        return ["success" => !str_contains(strtolower((string) ($result["stdout"] ?? "")), "error"), "message" => $mediaId > 0 ? "Profile avatar updated via WP Toolkit." : "Profile avatar cleared via WP Toolkit.", "media" => ["media_id" => $mediaId, "avatar_url" => (string) ($profile["data"]["avatar_url"] ?? "")]];
+        $profile = $this->getUserProfile($target, $userId, true);
+        $profileData = (array) ($profile["data"] ?? []);
+        if ($mediaId > 0) {
+            $savedMediaId = (int) ($profileData["wp_user_avatar"] ?? $profileData["avatar_media_id"] ?? 0);
+            $avatarUrl = (string) ($profileData["avatar_url"] ?? "");
+            if ($savedMediaId !== $mediaId || $avatarUrl === "") {
+                return ["success" => false, "message" => "WordPress avatar write did not verify after save.", "media" => ["media_id" => $mediaId, "avatar_url" => $avatarUrl]];
+            }
+        }
+        return ["success" => true, "message" => $mediaId > 0 ? "Profile avatar updated via WP Toolkit." : "Profile avatar cleared via WP Toolkit.", "media" => ["media_id" => $mediaId, "avatar_url" => (string) ($profileData["avatar_url"] ?? ""), "frontend_avatar_url" => (string) ($avatarMetaResult["frontend_avatar_url"] ?? "")]];
     }
 
     public function updateNativeField(array $target, string $objectType, int $objectId, string $field, string $value): array
@@ -161,102 +196,6 @@ trait ManagesWordPressUsersAndMeta
         }
 
         return ["success" => false, "message" => "Option updates require WP Toolkit."];
-    }
-
-    public function updateAcfField(array $target, string $field, mixed $value, string|int $targetRef): array
-    {
-        $target = $this->normalizeTarget($target);
-        $field = trim($field);
-        $targetRef = trim((string) $targetRef);
-
-        if ($field === "" || $targetRef === "") {
-            return ["success" => false, "message" => "An ACF field and target reference are required."];
-        }
-
-        if (!$this->usesWpToolkit($target)) {
-            return ["success" => false, "message" => "ACF field writes require WP Toolkit.", "stored" => null];
-        }
-
-        $encodedValue = base64_encode(json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: "null");
-        $parts = [
-            '$field=' . var_export($field, true) . ';',
-            '$targetRef=' . var_export($targetRef, true) . ';',
-            '$value=json_decode(base64_decode(' . var_export($encodedValue, true) . '), true);',
-            "\$acfBootstrapFiles=[WP_PLUGIN_DIR . '/advanced-custom-fields-pro/acf.php', WP_PLUGIN_DIR . '/advanced-custom-fields/acf.php'];",
-            "if (!function_exists('update_field')) { foreach (\$acfBootstrapFiles as \$acfBootstrapFile) { if (file_exists(\$acfBootstrapFile)) { require_once \$acfBootstrapFile; } } }",
-            "if (function_exists('acf')) { \$acfApp = acf(); if (is_object(\$acfApp) && method_exists(\$acfApp, 'initialize')) { \$acfApp->initialize(); } }",
-            "if (!function_exists('update_field')) { echo 'HEXA_ACF_FIELD_WRITE:' . wp_json_encode(['success'=>false,'message'=>'ACF update_field is unavailable in the WP CLI runtime.','stored'=>null]); return; }",
-            "\$updated = update_field(\$field, \$value, \$targetRef);",
-            "\$stored = function_exists('get_field') ? get_field(\$field, \$targetRef, false) : null;",
-            "\$success = \$updated !== false;",
-            "if (!\$success) { if (is_array(\$value)) { \$success = \$stored == \$value; } else { \$success = (string) \$stored === (string) \$value; } }",
-            "echo 'HEXA_ACF_FIELD_WRITE:' . wp_json_encode(['success'=>\$success,'message'=>\$success ? 'ACF field updated.' : 'ACF update_field returned false.','field'=>\$field,'target'=>\$targetRef,'stored'=>\$stored]);",
-        ];
-
-        $result = $this->evaluatePhp($target, implode('', $parts));
-        if (!($result["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($result["message"] ?? "ACF field write failed."), "stored" => null];
-        }
-
-        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_ACF_FIELD_WRITE:");
-        if (!is_array($payload)) {
-            return ["success" => false, "message" => "Failed to parse ACF field write output.", "stored" => null];
-        }
-
-        return $payload;
-    }
-
-    public function normalizeAcfMediaIdList(mixed $value): array
-    {
-        $ids = [];
-        $add = static function (mixed $candidate) use (&$ids): void {
-            $id = (int) $candidate;
-            if ($id > 0 && !in_array($id, $ids, true)) {
-                $ids[] = $id;
-            }
-        };
-        $collect = function (mixed $item) use (&$collect, $add): void {
-            if (is_array($item)) {
-                foreach ($item as $value) {
-                    $collect($value);
-                }
-                return;
-            }
-            if (is_object($item)) {
-                foreach (get_object_vars($item) as $value) {
-                    $collect($value);
-                }
-                return;
-            }
-            if (is_string($item) && preg_match_all('/\d+/', $item, $matches)) {
-                foreach ($matches[0] ?? [] as $match) {
-                    $add($match);
-                }
-                return;
-            }
-            $add($item);
-        };
-
-        $collect($value);
-
-        return $ids;
-    }
-
-    public function updateAcfGallery(array $target, string $field, string|int $targetRef, array $mediaIds): array
-    {
-        $ids = $this->normalizeAcfMediaIdList($mediaIds);
-        $write = $this->updateAcfField($target, $field, $ids, $targetRef);
-        if (!($write["success"] ?? false)) {
-            $write["media_ids"] = $ids;
-            return $write;
-        }
-
-        $storedIds = $this->normalizeAcfMediaIdList($write["stored"] ?? $ids);
-        $write["media_ids"] = $storedIds;
-        $write["stored"] = $storedIds;
-        $write["message"] = "ACF gallery updated.";
-
-        return $write;
     }
 
 
@@ -539,4 +478,5 @@ trait ManagesWordPressUsersAndMeta
         $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_SITE_ICON_CLEAR:");
         return is_array($payload) ? $payload : ["success" => false, "message" => "Failed to parse site icon clear output."];
     }
+
 }
