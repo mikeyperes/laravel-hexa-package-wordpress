@@ -59,4 +59,17 @@ class WordPressManagerArchitectureTest extends TestCase
             $this->assertDoesNotMatchRegularExpression('/\bfunction\s+[A-Za-z_]/', $source);
         }
     }
+
+    public function test_bulk_user_inventory_carries_known_post_counts_without_per_row_requests(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $inventory = (string) file_get_contents($root.'/src/Services/Concerns/WordPressManager/ManagesWordPressUserAccounts.php');
+        $normalizer = (string) file_get_contents($root.'/src/Services/Concerns/WordPressManager/HandlesWordPressRestAndToolkit.php');
+
+        $this->assertStringContainsString('count_user_posts((int) $user->ID,"post",false)', $inventory);
+        $this->assertStringContainsString('"post_count"=>$postCount', $inventory);
+        $this->assertStringContainsString('"post_count_known"=>true', $inventory);
+        $this->assertStringContainsString('"post_count" => $postCount', $normalizer);
+        $this->assertStringContainsString('"post_count_known" => $postCountKnown', $normalizer);
+    }
 }

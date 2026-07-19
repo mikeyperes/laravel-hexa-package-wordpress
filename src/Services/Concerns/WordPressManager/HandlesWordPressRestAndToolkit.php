@@ -229,28 +229,52 @@ PHP;
     {
         $simpleAvatarPayload = $user["simple_local_avatar"] ?? "";
         $avatarPayload = $simpleAvatarPayload ?: ($user["wp_user_avatars"] ?? "");
-        $avatarUrl = (string) ($user["avatar_url"] ?? "");
-        if ($avatarUrl === "") {
-            $avatarUrl = $this->extractUserAvatarUrl($avatarPayload);
-        }
+        $resolvedAvatar = $this->resolveUserAvatarPayload(
+            $avatarPayload !== "" ? $avatarPayload : ($user["avatar_urls"] ?? []),
+            224,
+        );
+        $avatarUrl = (string) (
+            ($user["avatar_thumbnail_url"] ?? null)
+            ?: ($resolvedAvatar["thumbnail_url"] ?? null)
+            ?: ($user["avatar_url"] ?? "")
+        );
+        $avatarFullUrl = (string) (
+            ($user["avatar_full_url"] ?? null)
+            ?: ($resolvedAvatar["full_url"] ?? null)
+            ?: ($user["avatar_url"] ?? null)
+            ?: $avatarUrl
+        );
         $avatarMediaId = (string) (
             $user["avatar_media_id"]
-            ?? $this->extractUserAvatarMediaId($simpleAvatarPayload)
+            ?? $resolvedAvatar["media_id"]
             ?: ($user["wp_user_avatar"] ?? "")
         );
+        $postCountKnown = array_key_exists("post_count", $user)
+            && is_numeric($user["post_count"])
+            && (!array_key_exists("post_count_known", $user) || (bool) $user["post_count_known"]);
+        $postCount = $postCountKnown ? max(0, (int) $user["post_count"]) : null;
 
         return [
             "id" => (int) ($user["id"] ?? $user["ID"] ?? 0),
             "ID" => (int) ($user["ID"] ?? $user["id"] ?? 0),
             "user_login" => (string) ($user["user_login"] ?? $user["slug"] ?? ""),
+            "user_nicename" => (string) ($user["user_nicename"] ?? $user["slug"] ?? $user["user_login"] ?? ""),
             "display_name" => (string) ($user["display_name"] ?? $user["name"] ?? ""),
             "user_email" => (string) ($user["user_email"] ?? $user["email"] ?? ""),
+            "user_url" => (string) ($user["user_url"] ?? $user["url"] ?? ""),
             "roles" => array_values(array_map("strval", (array) ($user["roles"] ?? []))),
             "wp_user_avatar" => (string) ($user["wp_user_avatar"] ?? ""),
             "wp_user_avatars" => is_scalar($avatarPayload) ? (string) $avatarPayload : serialize($avatarPayload),
             "simple_local_avatar" => is_scalar($simpleAvatarPayload) ? (string) $simpleAvatarPayload : serialize($simpleAvatarPayload),
             "avatar_media_id" => $avatarMediaId,
             "avatar_url" => $avatarUrl,
+            "avatar_thumbnail_url" => $avatarUrl,
+            "avatar_full_url" => $avatarFullUrl,
+            "avatar_sizes" => (array) ($resolvedAvatar["sizes"] ?? []),
+            "author_url" => (string) ($user["author_url"] ?? $user["link"] ?? ""),
+            "wp_admin_url" => (string) ($user["wp_admin_url"] ?? ""),
+            "post_count" => $postCount,
+            "post_count_known" => $postCountKnown,
         ];
     }
 
