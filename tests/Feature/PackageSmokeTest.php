@@ -38,5 +38,13 @@ class PackageSmokeTest extends TestCase
         }
 
         $this->assertTrue($hasVersion, 'At least one package config file must expose a semantic version.');
+        $this->assertInstanceOf(
+            \hexa_package_wordpress\Media\WordPressMediaAssignmentService::class,
+            app(\hexa_package_wordpress\Media\WordPressMediaAssignmentService::class)
+        );
+        $this->assertInstanceOf(
+            \hexa_package_wordpress\Media\WordPressMediaOperationStore::class,
+            app(\hexa_package_wordpress\Media\WordPressMediaOperationStore::class)
+        );
     }
 }

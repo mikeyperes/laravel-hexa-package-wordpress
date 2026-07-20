@@ -5,14 +5,14 @@
 @endphp
 {{-- Shared WordPress user field bridge panel using the SFPF audit field-workspace interaction model. --}}
                         <div class="jd-field jd-field-gate jd-sfpf-bridge">
-                            <div class="jd-tool-head jd-sfpf-bridge-head">
+                            <div class="jd-tool-head jd-sfpf-bridge-head" data-journalist-profile-fields-header>
                                 <div>
-                                    <strong>Notion / WordPress field bridge</strong>
-                                    <div class="jd-row-sub">Load live Notion and WordPress values, then use the same transfer, AI proposal, and manual-save workflow as SFPF.</div>
+                                    <strong>Profile fields</strong>
+                                    <div class="jd-row-sub">Compare the connected Notion entity with the live WordPress author, then update only the fields that need attention.</div>
                                 </div>
                                 <button type="button" class="jd-mini jd-mini-indigo" :disabled="{!! $linkExpr !!}.field_busy" :title="{!! $linkExpr !!}.field_busy ? disabledTitle({!! $linkExpr !!}) : `Load Notion fields for this mapped journalist`" @click.stop="loadFieldBridge({!! $linkExpr !!})" data-sfpf-action="load-journalist-field-bridge">
                                     <span x-show="{!! $linkExpr !!}.field_busy===`load`" class="jd-spin"></span>
-                                    <span x-text="{!! $linkExpr !!}.field_busy===`load` ? `Loading` : (fieldBridgeLoaded({!! $linkExpr !!}) ? `Reload fields` : `Load Notion Fields`)"></span>
+                                    <span x-text="{!! $linkExpr !!}.field_busy===`load` ? `Loading fields...` : (fieldBridgeLoaded({!! $linkExpr !!}) ? `Reload fields` : `Load fields`)"></span>
                                 </button>
                             </div>
                             <div class="jd-inline-status" x-show="{!! $linkExpr !!}.field_message" :class="{!! $linkExpr !!}.field_error ? `is-error` : ``" x-text="{!! $linkExpr !!}.field_message"></div>
@@ -188,25 +188,27 @@
                                     </div>
                                     <div class="jd-profile-photo-card jd-bridge-profile-photo-card" :class="profilePhotoCardClass({!! $linkExpr !!})" @if(!$showProfilePhotoWithoutFields) x-show="bridgePhotoRows({!! $linkExpr !!}).length" @endif x-data="{ open: !profilePhotoBridgeDone({!! $linkExpr !!}) }" x-init="$nextTick(() => { if(!{!! $linkExpr !!}.photo_scanned_once && bridgePhotoRows({!! $linkExpr !!}).length){ {!! $linkExpr !!}.photo_scanned_once = true; scanPhotos({!! $linkExpr !!}); } })" x-effect="if(profilePhotoBridgeDone({!! $linkExpr !!})){ open=false } else if(profilePhotoBridgeHasError({!! $linkExpr !!})){ open=true }" data-journalist-profile-photo-bridge>
                                         <div class="jd-profile-photo-head">
-                                            <div class="jd-sfpf-field-title-block"><span x-show="profilePhotoBridgeDone({!! $linkExpr !!})" class="jd-sfpf-done-icon">✓</span><div><div class="jd-profile-photo-title">Profile photo</div><div class="jd-profile-photo-note">Edit the Notion photo sources, paste image or Drive URLs, then pick any image to set the WordPress profile photo. Drive folders load into the candidate gallery on Scan.</div></div></div>
-                                            <div class="jd-sfpf-field-meta">
-                                                <button type="button" x-show="profilePhotoBridgeDone({!! $linkExpr !!})" class="jd-sfpf-pill jd-sfpf-pill-done" title="Move profile photo back to review" :disabled="{!! $linkExpr !!}.photo_completion_busy === true" @click.stop="setProfilePhotoBridgeDone({!! $linkExpr !!}, false); open=true">Completed <span class="jd-sfpf-pill-done-x" aria-hidden="true">&times;</span></button>
-                                                <span x-show="profilePhotoBridgeInSync({!! $linkExpr !!}) && !profilePhotoBridgeStatus({!! $linkExpr !!})" class="jd-sfpf-pill jd-sfpf-pill-sync">in sync</span>
-                                                <span x-show="profilePhotoBridgeStatus({!! $linkExpr !!})" class="jd-sfpf-pill jd-sfpf-status-pill" :class="`is-${profilePhotoBridgeStatus({!! $linkExpr !!})}`"><span class="jd-spin jd-spin-dark" x-show="profilePhotoBridgeStatus({!! $linkExpr !!}) === `saving`"></span><span x-show="profilePhotoBridgeStatus({!! $linkExpr !!}) !== `saving`" x-text="profilePhotoBridgeStatusIcon({!! $linkExpr !!})"></span><span x-text="profilePhotoBridgeStatusLabel({!! $linkExpr !!})"></span></span>
-                                                <button type="button" x-show="!profilePhotoBridgeDone({!! $linkExpr !!})" class="jd-sfpf-mini jd-sfpf-mini-done" :disabled="{!! $linkExpr !!}.photo_completion_busy === true" @click.stop="setProfilePhotoBridgeDone({!! $linkExpr !!}, true); open=false">Mark completed</button>
-                                                <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost" @click.stop="open = !open" :aria-expanded="open ? `true` : `false`" x-text="open ? `Collapse` : `Expand`"></button>
-                                            </div>
-                                            <div class="jd-gallery-actions">
-                                                @if(Route::has('google-drive.photo-renamer'))
-                                                    <a href="{{ route('google-drive.photo-renamer') }}" target="_blank" rel="noopener" class="jd-mini jd-mini-ghost" @click.stop>Photo renamer <span aria-hidden="true">&#8599;</span></a>
-                                                @else
-                                                    <a href="/google-drive/photo-renamer" target="_blank" rel="noopener" class="jd-mini jd-mini-ghost" @click.stop>Photo renamer <span aria-hidden="true">&#8599;</span></a>
-                                                @endif
-                                                @if($showCompanyPhotoPicker)
-                                                    <button type="button" class="jd-mini jd-mini-ghost" :disabled="photoScanBusy({!! $linkExpr !!})" @click.stop="scanCompanyPhotos({!! $linkExpr !!})" data-journalist-action="pick-company-photos"><span x-show="photoBusyValue({!! $linkExpr !!})===`scan-master`" class="jd-spin jd-spin-dark"></span><span x-text="photoBusyValue({!! $linkExpr !!})===`scan-master` ? `Loading company photos...` : `Pick from company photos`"></span></button>
-                                                @endif
-                                                <button type="button" class="jd-mini jd-mini-ghost" :disabled="photoScanBusy({!! $linkExpr !!})" @click.stop="scanPhotos({!! $linkExpr !!})" data-journalist-action="load-bridge-folder-photos"><span x-show="photoScanBusy({!! $linkExpr !!})" class="jd-spin jd-spin-dark"></span><span x-text="photoScanBusy({!! $linkExpr !!}) ? `Scanning...` : `Scan all sources`"></span></button>
-                                                <label class="jd-mini jd-mini-indigo" :style="photoMutationBusy({!! $linkExpr !!}) ? `opacity:.55;cursor:default` : ``" @click.stop data-journalist-action="upload-bridge-profile-photo"><span x-show="{!! $linkExpr !!}.photo_busy===`upload`" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.photo_busy===`upload` ? `Uploading...` : `Upload`"></span><input type="file" accept="image/*" style="display:none" :disabled="photoMutationBusy({!! $linkExpr !!})" @change="uploadPhotoFile({!! $linkExpr !!}, $event, bridgeDefaultPhotoField({!! $linkExpr !!}))"></label>
+                                            <div class="jd-sfpf-field-title-block"><span x-show="profilePhotoBridgeDone({!! $linkExpr !!})" class="jd-sfpf-done-icon">✓</span><div><div class="jd-profile-photo-title">Profile photo</div><div class="jd-profile-photo-note">Review the current WordPress portrait, upload a replacement, or choose one from the connected photo sources.</div></div></div>
+                                            <div class="jd-profile-photo-controls">
+                                                <div class="jd-sfpf-field-meta">
+                                                    <button type="button" x-show="profilePhotoBridgeDone({!! $linkExpr !!})" class="jd-sfpf-pill jd-sfpf-pill-done" title="Move profile photo back to review" :disabled="{!! $linkExpr !!}.photo_completion_busy === true" @click.stop="setProfilePhotoBridgeDone({!! $linkExpr !!}, false); open=true">Completed <span class="jd-sfpf-pill-done-x" aria-hidden="true">&times;</span></button>
+                                                    <span x-show="profilePhotoBridgeInSync({!! $linkExpr !!}) && !profilePhotoBridgeStatus({!! $linkExpr !!})" class="jd-sfpf-pill jd-sfpf-pill-sync">in sync</span>
+                                                    <span x-show="profilePhotoBridgeStatus({!! $linkExpr !!})" class="jd-sfpf-pill jd-sfpf-status-pill" :class="`is-${profilePhotoBridgeStatus({!! $linkExpr !!})}`"><span class="jd-spin jd-spin-dark" x-show="profilePhotoBridgeStatus({!! $linkExpr !!}) === `saving`"></span><span x-show="profilePhotoBridgeStatus({!! $linkExpr !!}) !== `saving`" x-text="profilePhotoBridgeStatusIcon({!! $linkExpr !!})"></span><span x-text="profilePhotoBridgeStatusLabel({!! $linkExpr !!})"></span></span>
+                                                    <button type="button" x-show="!profilePhotoBridgeDone({!! $linkExpr !!})" class="jd-sfpf-mini jd-sfpf-mini-done" :disabled="{!! $linkExpr !!}.photo_completion_busy === true" @click.stop="setProfilePhotoBridgeDone({!! $linkExpr !!}, true); open=false">Mark completed</button>
+                                                    <button type="button" class="jd-sfpf-mini jd-sfpf-mini-ghost jd-profile-photo-toggle" @click.stop="open = !open" :aria-expanded="open ? `true` : `false`" data-profile-photo-toggle><span class="jd-profile-photo-toggle-caret" :class="open ? `is-open` : ``" aria-hidden="true">&#9656;</span><span x-text="open ? `Collapse photo tools` : `Expand photo tools`"></span></button>
+                                                </div>
+                                                <div class="jd-gallery-actions">
+                                                    <label class="jd-mini jd-mini-indigo" :style="photoMutationBusy({!! $linkExpr !!}) ? `opacity:.55;cursor:default` : ``" @click.stop data-journalist-action="upload-bridge-profile-photo"><span x-show="{!! $linkExpr !!}.photo_busy===`upload`" class="jd-spin"></span><span x-text="{!! $linkExpr !!}.photo_busy===`upload` ? `Uploading...` : `Upload photo`"></span><input type="file" accept="image/*" style="display:none" :disabled="photoMutationBusy({!! $linkExpr !!})" @change="uploadPhotoFile({!! $linkExpr !!}, $event, bridgeDefaultPhotoField({!! $linkExpr !!}))"></label>
+                                                    @if($showCompanyPhotoPicker)
+                                                        <button type="button" class="jd-mini jd-mini-ghost" :disabled="photoScanBusy({!! $linkExpr !!})" @click.stop="scanCompanyPhotos({!! $linkExpr !!})" data-journalist-action="pick-company-photos"><span x-show="photoBusyValue({!! $linkExpr !!})===`scan-master`" class="jd-spin jd-spin-dark"></span><span x-text="photoBusyValue({!! $linkExpr !!})===`scan-master` ? `Loading company photos...` : `Company photos`"></span></button>
+                                                    @endif
+                                                    <button type="button" class="jd-mini jd-mini-ghost" :disabled="photoScanBusy({!! $linkExpr !!})" @click.stop="scanPhotos({!! $linkExpr !!})" data-journalist-action="load-bridge-folder-photos"><span x-show="photoScanBusy({!! $linkExpr !!})" class="jd-spin jd-spin-dark"></span><span x-text="photoScanBusy({!! $linkExpr !!}) ? `Scanning...` : `Scan sources`"></span></button>
+                                                    @if(Route::has('google-drive.photo-renamer'))
+                                                        <a href="{{ route('google-drive.photo-renamer') }}" target="_blank" rel="noopener" class="jd-mini jd-mini-ghost" @click.stop>Photo renamer <span aria-hidden="true">&#8599;</span></a>
+                                                    @else
+                                                        <a href="/google-drive/photo-renamer" target="_blank" rel="noopener" class="jd-mini jd-mini-ghost" @click.stop>Photo renamer <span aria-hidden="true">&#8599;</span></a>
+                                                    @endif
+                                                </div>
                                             </div>
                                         </div>
                                         <div x-show="!open" x-cloak class="jd-profile-photo-summary">
@@ -215,12 +217,22 @@
                                             <div x-show="{!! $linkExpr !!}.photo_message"><b>Status:</b> <span x-text="{!! $linkExpr !!}.photo_message"></span></div>
                                         </div>
                                         <div x-show="open" x-cloak class="jd-profile-photo-body">
+                                            <div class="jd-current-profile-photo" x-show="profilePhotoUrl({!! $linkExpr !!})" x-cloak>
+                                                <img class="jd-current-profile-photo-img" :src="profilePhotoUrl({!! $linkExpr !!})" :alt="`Current WordPress profile photo for ${{!! $linkExpr !!}.wp_name || {!! $linkExpr !!}.profile_name || `journalist`}`" loading="eager" decoding="async" x-on:error="markDeadProfilePhoto({!! $linkExpr !!}, $event)" data-profile-photo-thumbnail>
+                                                <div class="jd-current-profile-photo-meta">
+                                                    <div class="vp-source-field-title">Current WordPress profile photo</div>
+                                                    <div class="vp-meta" x-text="profilePhotoSource({!! $linkExpr !!})"></div>
+                                                    <div class="vp-meta" x-show="{!! $linkExpr !!}.profile_photo && {!! $linkExpr !!}.profile_photo.source_url" x-text="`Source: ` + {!! $linkExpr !!}.profile_photo.source_url"></div>
+                                                    <a class="jd-link" :href="profilePhotoFullUrl({!! $linkExpr !!})" target="_blank" rel="noopener noreferrer">Open full image &#8599;</a>
+                                                </div>
+                                            </div>
                                             <div x-data="{
                                                 notionMediaConfig:{
                                                     hooks:{
                                                         detectOnlineImage:(payload = {}) => detectBridgeOnlineImage({!! $linkExpr !!}, payload || {}),
                                                         uploadMediaFile:(payload = {}) => uploadBridgeMediaFile({!! $linkExpr !!}, payload || {}),
-                                                        uploadFieldPhoto:(payload = {}) => uploadBridgeMediaFile({!! $linkExpr !!}, payload || {})
+                                                        uploadFieldPhoto:(payload = {}) => uploadBridgeMediaFile({!! $linkExpr !!}, payload || {}),
+                                                        mergeMediaCandidates:(payload = {}) => bridgeMediaMergeCandidates({!! $linkExpr !!}, payload.candidates || [])
                                                     }
                                                 },
                                                 activeSourceId(){ return {!! $linkExpr !!}.id || null },

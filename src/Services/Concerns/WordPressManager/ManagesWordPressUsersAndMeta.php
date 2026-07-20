@@ -53,8 +53,31 @@ trait ManagesWordPressUsersAndMeta
                 }
             }
         }
+        $avatarPayload = ($data["simple_local_avatar"] ?? null)
+            ?: ($data["wp_user_avatars"] ?? null)
+            ?: ($data["avatar_urls"] ?? []);
+        $resolvedAvatar = $this->resolveUserAvatarPayload($avatarPayload, 224);
+        $data["avatar_thumbnail_url"] = (string) (
+            $resolvedAvatar["thumbnail_url"]
+            ?: ($data["avatar_thumbnail_url"] ?? $data["avatar_url"] ?? "")
+        );
+        $data["avatar_full_url"] = (string) (
+            $resolvedAvatar["full_url"]
+            ?: ($data["avatar_full_url"] ?? $data["avatar_url"] ?? "")
+        );
+        $resolvedSizes = (array) ($resolvedAvatar["sizes"] ?? []);
+        $data["avatar_sizes"] = $resolvedSizes !== [] ? $resolvedSizes : (array) ($data["avatar_sizes"] ?? []);
+        if ($data["avatar_thumbnail_url"] !== "") {
+            $data["avatar_url"] = $data["avatar_thumbnail_url"];
+        }
+        $data = $this->normalizeUserAvatarForProvider(
+            $data,
+            $this->activeUserAvatarProvider($target, $forceRefresh),
+        );
         $data["ID"] = (string) $userId;
-        $data["wp_admin_url"] = "/wp-admin/user-edit.php?user_id=" . $userId;
+        if (empty($data["wp_admin_url"])) {
+            $data["wp_admin_url"] = "/wp-admin/user-edit.php?user_id=" . $userId;
+        }
         $data["profile_admin_url"] = $data["wp_admin_url"];
         return ["success" => true, "message" => "User profile loaded.", "data" => $data];
     }
@@ -65,7 +88,8 @@ trait ManagesWordPressUsersAndMeta
         $target = $this->normalizeTarget($target);
         if ($userId <= 0) return ["success" => false, "message" => "User ID is required.", "media" => null];
         if (!$this->usesWpToolkit($target)) return ["success" => false, "message" => "Profile avatar writes require WP Toolkit.", "media" => null];
-        $before = $this->getUserProfile($target, $userId);
+        $this->activeUserAvatarProvider($target, true);
+        $before = $this->getUserProfile($target, $userId, true);
         $previous = (int) (($before["data"]["wp_user_avatar"] ?? $before["data"]["avatar_media_id"] ?? 0));
         $mediaId = $mediaId !== null && $mediaId > 0 ? (int) $mediaId : 0;
         if ($mediaId > 0) {
@@ -85,20 +109,25 @@ trait ManagesWordPressUsersAndMeta
                 "avatar_result" => $avatarMetaResult,
             ];
         }
-        if ($mediaId > 0 && (string) ($avatarMetaResult["stored_type"] ?? "") !== "array") {
-            return ["success" => false, "message" => "WordPress avatar plugin payload did not persist as an array.", "media" => null];
-        }
         if ($deletePreviousMedia && $previous > 0 && $previous !== $mediaId) $this->deleteMedia($target, $previous, true);
         $profile = $this->getUserProfile($target, $userId, true);
         $profileData = (array) ($profile["data"] ?? []);
         if ($mediaId > 0) {
-            $savedMediaId = (int) ($profileData["wp_user_avatar"] ?? $profileData["avatar_media_id"] ?? 0);
+            $savedMediaId = (int) ($profileData["avatar_media_id"] ?? $profileData["wp_user_avatar"] ?? 0);
             $avatarUrl = (string) ($profileData["avatar_url"] ?? "");
             if ($savedMediaId !== $mediaId || $avatarUrl === "") {
                 return ["success" => false, "message" => "WordPress avatar write did not verify after save.", "media" => ["media_id" => $mediaId, "avatar_url" => $avatarUrl]];
             }
         }
-        return ["success" => true, "message" => $mediaId > 0 ? "Profile avatar updated via WP Toolkit." : "Profile avatar cleared via WP Toolkit.", "media" => ["media_id" => $mediaId, "avatar_url" => (string) ($profileData["avatar_url"] ?? ""), "frontend_avatar_url" => (string) ($avatarMetaResult["frontend_avatar_url"] ?? "")]];
+        return ["success" => true, "message" => $mediaId > 0 ? "Profile avatar updated via WP Toolkit." : "Profile avatar cleared via WP Toolkit.", "media" => [
+            "media_id" => $mediaId,
+            "avatar_url" => (string) ($profileData["avatar_full_url"] ?? $profileData["avatar_url"] ?? ""),
+            "thumbnail_url" => (string) ($profileData["avatar_thumbnail_url"] ?? $profileData["avatar_url"] ?? ""),
+            "full_url" => (string) ($profileData["avatar_full_url"] ?? $profileData["avatar_url"] ?? ""),
+            "avatar_sizes" => (array) ($profileData["avatar_sizes"] ?? []),
+            "frontend_avatar_url" => (string) ($avatarMetaResult["frontend_avatar_url"] ?? ""),
+            "provider" => (string) ($avatarMetaResult["provider"] ?? $profileData["avatar_provider"] ?? ""),
+        ]];
     }
 
     public function updateNativeField(array $target, string $objectType, int $objectId, string $field, string $value): array

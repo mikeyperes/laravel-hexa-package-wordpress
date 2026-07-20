@@ -466,6 +466,11 @@ PHP;
                     return ["success" => false, "message" => "Failed to parse WP Toolkit user list output.", "users" => []];
                 }
                 $users = array_values(array_map([$this, "normalizeUserRow"], array_filter($payload, "is_array")));
+                $provider = $this->activeUserAvatarProvider($target);
+                $users = array_values(array_map(
+                    fn (array $user): array => $this->normalizeUserAvatarForProvider($user, $provider),
+                    $users,
+                ));
                 return ["success" => true, "message" => count($users) . " user(s) loaded via WP Toolkit cache source.", "users" => $users];
             };
 

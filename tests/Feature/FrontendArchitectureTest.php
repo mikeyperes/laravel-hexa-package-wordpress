@@ -3,6 +3,7 @@
 namespace HexaPackageSmokeTests\LaravelHexaPackageWordpress;
 
 use hexa_core\Support\PackageAssetRegistry;
+use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressAvatars;
 use hexa_package_wordpress\Services\WordPressUserDeletionService;
 use Tests\TestCase;
 
@@ -53,5 +54,102 @@ class FrontendArchitectureTest extends TestCase
         $this->assertStringContainsString('showCompanyPhotoPicker', $panel);
         $this->assertStringContainsString('data-journalist-action="pick-company-photos"', $panel);
         $this->assertStringContainsString('scanCompanyPhotos', $panel);
+        $this->assertStringContainsString('Current WordPress profile photo', $panel);
+        $this->assertStringContainsString('data-profile-photo-thumbnail', $panel);
+        $this->assertStringContainsString('profilePhotoFullUrl', $panel);
+        $this->assertStringContainsString('mergeMediaCandidates:', $panel);
     }
+
+    public function test_avatar_payload_resolver_selects_the_smallest_sufficient_thumbnail(): void
+    {
+        $resolver = new class {
+            use ManagesWordPressAvatars;
+        };
+        $payload = serialize([
+            'media_id' => 55761,
+            96 => 'https://example.test/photo-150x150.png',
+            250 => 'https://example.test/photo-300x300.png',
+            500 => 'https://example.test/photo-768x768.png',
+            'full' => 'https://example.test/photo.png',
+        ]);
+
+        $resolved = $resolver->resolveUserAvatarPayload($payload, 224);
+
+        $this->assertSame('https://example.test/photo-300x300.png', $resolved['thumbnail_url']);
+        $this->assertSame('https://example.test/photo.png', $resolved['full_url']);
+        $this->assertSame(250, $resolved['selected_size']);
+        $this->assertSame(55761, $resolved['media_id']);
+    }
+    public function test_provider_aware_avatar_reads_do_not_fall_back_to_stale_legacy_metadata(): void
+    {
+        $resolver = new class {
+            use ManagesWordPressAvatars;
+        };
+        $simple = serialize([
+            "media_id" => 120,
+            250 => "https://example.test/simple-300x300.png",
+            "full" => "https://example.test/simple.png",
+        ]);
+        $legacy = serialize([
+            "media_id" => 999,
+            250 => "https://example.test/legacy-300x300.png",
+            "full" => "https://example.test/legacy.png",
+        ]);
+
+        $resolved = $resolver->normalizeUserAvatarForProvider([
+            "simple_local_avatar" => $simple,
+            "wp_user_avatars" => $legacy,
+        ], "simple_local_avatars");
+
+        $this->assertSame("simple_local_avatars", $resolved["avatar_provider"]);
+        $this->assertSame("120", $resolved["avatar_media_id"]);
+        $this->assertSame("https://example.test/simple-300x300.png", $resolved["avatar_url"]);
+
+        $missing = $resolver->normalizeUserAvatarForProvider([
+            "simple_local_avatar" => "",
+            "wp_user_avatars" => $legacy,
+        ], "simple_local_avatars");
+
+        $this->assertSame("0", $missing["avatar_media_id"]);
+        $this->assertSame("", $missing["avatar_url"]);
+    }
+
+    public function test_simple_local_avatar_runtime_is_resolved_once_for_reads_and_writes(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $avatars = (string) file_get_contents(
+            $root . '/src/Services/Concerns/WordPressManager/ManagesWordPressAvatars.php',
+        );
+        $users = (string) file_get_contents(
+            $root . '/src/Services/Concerns/WordPressManager/ManagesWordPressUsersAndMeta.php',
+        );
+
+        $this->assertStringContainsString('simpleLocalAvatarRuntimePhp()', $avatars);
+        $this->assertStringContainsString('class_exists("Simple_Local_Avatars")', $avatars);
+        $this->assertStringContainsString('new Simple_Local_Avatars()', $avatars);
+        $this->assertStringContainsString('plugin_api_available', $avatars);
+        $this->assertStringContainsString(
+            'activeUserAvatarProvider($target, $forceRefresh)',
+            $users,
+        );
+        $this->assertStringContainsString(
+            'activeUserAvatarProvider($target, true)',
+            $users,
+        );
+    }
+
+    public function test_media_operation_polling_asset_and_route_are_owned_by_wordpress_package(): void
+    {
+        $assets = app(PackageAssetRegistry::class)->assetsFor("wordpress");
+        $root = dirname(__DIR__, 2);
+        $routes = (string) file_get_contents($root . "/routes/wordpress.php");
+        $javascript = (string) file_get_contents($assets["media-operations.js"]);
+
+        $this->assertArrayHasKey("media-operations.js", $assets);
+        $this->assertStringContainsString("HexaWordPressMediaOperations", $javascript);
+        $this->assertStringContainsString("/wordpress/media-operations/", $javascript);
+        $this->assertStringContainsString("MediaOperationController", $routes);
+        $this->assertStringContainsString("wordpress.media-operations.show", $routes);
+    }
+
 }
