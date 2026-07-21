@@ -6,6 +6,7 @@ use hexa_package_media\Data\MediaArtifact;
 use hexa_package_media\Data\MediaInput;
 use hexa_package_media\Exceptions\MediaPipelineException;
 use hexa_package_media\MediaAcquisitionPipeline;
+use hexa_package_wordpress\Media\Contracts\CacheAwareWordPressMediaDestination;
 use hexa_package_wordpress\Media\Contracts\WordPressMediaDestination;
 use RuntimeException;
 use Throwable;
@@ -21,6 +22,7 @@ final class WordPressMediaAssignmentService
     public function __construct(
         private readonly MediaAcquisitionPipeline $media,
         private readonly WordPressMediaGateway $gateway,
+        private readonly WordPressMediaDuplicateResolver $duplicates,
         private readonly WordPressMediaOperationStore $operations,
     ) {
     }
@@ -71,21 +73,16 @@ final class WordPressMediaAssignmentService
 
             $mediaId = 0;
             $reused = false;
+            $deduplication = ["success" => true, "found" => false, "media_id" => 0, "match_method" => "", "attempts" => []];
             if (($options["deduplicate"] ?? true) && $artifact->sha256 !== "") {
-                $this->emit("deduplicate", "working", "Checking WordPress for an existing identical image attachment.", ["sha256" => $artifact->sha256]);
-                $existing = $this->gateway->findBySha256($target, $artifact->sha256);
-                if (($existing["success"] ?? false) && ($existing["found"] ?? false)) {
-                    $mediaId = (int) ($existing["media_id"] ?? 0);
-                    $reused = $mediaId > 0;
-                } elseif (!($existing["success"] ?? true)) {
-                    $this->emit("deduplicate", "warn", (string) ($existing["message"] ?? "Duplicate lookup failed; continuing with a verified upload."));
-                }
-                $this->emit("deduplicate", $reused ? "ok" : "ok", $reused
-                    ? "Reusing identical WordPress image attachment #{$mediaId}."
-                    : "No identical WordPress attachment found; a new upload is required.", [
-                    "media_id" => $mediaId,
-                    "reused" => $reused,
-                ]);
+                $deduplication = $this->duplicates->resolve(
+                    $target,
+                    $artifact,
+                    ["current_media_id" => (int) ($previous["media_id"] ?? 0)],
+                    fn (string $stage, string $state, string $message, array $context = []) => $this->emit($stage, $state, $message, $context),
+                );
+                $mediaId = (int) ($deduplication["media_id"] ?? 0);
+                $reused = ($deduplication["found"] ?? false) && $mediaId > 0;
             }
 
             if (!$reused) {
@@ -139,6 +136,8 @@ final class WordPressMediaAssignmentService
                 "already_assigned" => $alreadyAssigned,
             ]);
 
+            $cache = $this->purgeDestinationCache($target, $destination);
+
             $this->emit("verify", "working", "Reloading WordPress to verify the saved destination state and media file.", ["media_id" => $mediaId]);
             $finalInspection = $this->gateway->inspect($target, $mediaId);
             if (!($finalInspection["success"] ?? false)) {
@@ -163,8 +162,11 @@ final class WordPressMediaAssignmentService
                 "url" => (string) ($verified["url"] ?? ""),
                 "mime_type" => $artifact->mimeType,
                 "reused" => $reused,
+                "match_method" => (string) ($deduplication["match_method"] ?? ""),
+                "deduplication" => $deduplication,
                 "artifact" => $artifact->toArray(),
                 "destination" => $verified,
+                "cache" => $cache,
                 "previous" => $previous,
                 "operation_id" => $this->operationId,
                 "events" => $this->events,
@@ -259,6 +261,8 @@ final class WordPressMediaAssignmentService
                 "already_assigned" => $alreadyAssigned,
             ]);
 
+            $cache = $this->purgeDestinationCache($target, $destination);
+
             $finalInspection = $this->gateway->inspect($target, $mediaId);
             if (!($finalInspection["success"] ?? false)) {
                 throw new RuntimeException("WordPress attachment verification failed after destination assignment: "
@@ -279,6 +283,7 @@ final class WordPressMediaAssignmentService
                 "mime_type" => (string) ($inspection["mime_type"] ?? ""),
                 "reused" => true,
                 "destination" => $verified,
+                "cache" => $cache,
                 "previous" => $previous,
                 "operation_id" => $this->operationId,
                 "events" => $this->events,
@@ -325,6 +330,42 @@ final class WordPressMediaAssignmentService
         $assigned["already_assigned"] = false;
 
         return $assigned;
+    }
+
+    private function purgeDestinationCache(
+        array $target,
+        WordPressMediaDestination $destination,
+    ): ?array {
+        if (!$destination instanceof CacheAwareWordPressMediaDestination) {
+            return null;
+        }
+
+        $this->emit("cache_purge", "working", "Invalidating cached WordPress output for the updated destination.", [
+            "destination" => $destination->key(),
+        ]);
+        $cache = $destination->purgeCache($this->gateway, $target);
+        if (!($cache["success"] ?? false)) {
+            $this->emit("cache_purge", "error", (string) ($cache["message"] ?? "WordPress destination cache invalidation failed."), [
+                "post_id" => (int) ($cache["post_id"] ?? 0),
+                "permalink" => (string) ($cache["permalink"] ?? ""),
+                "actions" => array_values((array) ($cache["actions"] ?? [])),
+                "warnings" => array_values((array) ($cache["warnings"] ?? [])),
+                "litespeed_detected" => (bool) ($cache["litespeed_detected"] ?? false),
+                "fallback" => (string) ($cache["fallback"] ?? ""),
+            ]);
+            throw new RuntimeException((string) ($cache["message"] ?? "WordPress destination cache invalidation failed."));
+        }
+
+        $this->emit("cache_purge", "ok", (string) ($cache["message"] ?? "WordPress destination cache invalidated."), [
+            "post_id" => (int) ($cache["post_id"] ?? 0),
+            "permalink" => (string) ($cache["permalink"] ?? ""),
+            "actions" => array_values((array) ($cache["actions"] ?? [])),
+            "warnings" => array_values((array) ($cache["warnings"] ?? [])),
+            "litespeed_detected" => (bool) ($cache["litespeed_detected"] ?? false),
+            "fallback" => (string) ($cache["fallback"] ?? ""),
+        ]);
+
+        return $cache;
     }
 
     private function begin(WordPressMediaDestination $destination, array $options): void

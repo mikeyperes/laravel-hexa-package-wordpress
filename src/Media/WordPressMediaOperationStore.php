@@ -110,7 +110,9 @@ final class WordPressMediaOperationStore
             "destination", "destination_label", "media_id", "url", "filename", "mime_type",
             "bytes", "width", "height", "sha256", "reused", "rollback", "deleted_attachment",
             "provider", "user_id", "post_id", "site_id", "source_id", "profile_id", "error_code",
-            "retryable", "warnings",
+            "retryable", "warnings", "strategy", "strategy_number", "strategy_total", "candidate_count",
+            "scanned_count", "hashed_count", "matched", "match_method", "current_media_id", "skipped",
+            "actions", "permalink", "litespeed_detected", "fallback",
         ];
 
         return array_intersect_key($context, array_flip($allowed));

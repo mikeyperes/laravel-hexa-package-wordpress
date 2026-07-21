@@ -12,6 +12,7 @@ use hexa_package_wordpress\Media\Contracts\WordPressMediaDestination;
 use hexa_package_wordpress\Media\Destinations\PostFeaturedImageDestination;
 use hexa_package_wordpress\Media\Destinations\UserAvatarDestination;
 use hexa_package_wordpress\Media\WordPressMediaAssignmentService;
+use hexa_package_wordpress\Media\WordPressMediaDuplicateResolver;
 use hexa_package_wordpress\Media\WordPressMediaGateway;
 use hexa_package_wordpress\Media\WordPressMediaOperationStore;
 use hexa_package_wordpress\Services\WordPressManagerService;
@@ -143,6 +144,8 @@ class WordPressMediaAssignmentServiceTest extends TestCase
         $this->assertSame(12, $captured["media_id"]);
         $this->assertTrue($destination->assign($gateway, [], 77)["success"]);
         $this->assertSame(77, $manager->featuredImageId);
+        $this->assertTrue($destination->purgeCache($gateway, [])["success"]);
+        $this->assertSame(1, $manager->cachePurgeCalls);
         $this->assertTrue($destination->verify($gateway, [], 77)["success"]);
         $this->assertTrue($destination->rollback($gateway, [], $captured)["success"]);
         $this->assertSame(12, $manager->featuredImageId);
@@ -181,6 +184,74 @@ class WordPressMediaAssignmentServiceTest extends TestCase
             $source,
         );
         $this->assertStringContainsString('"invalid_media_ids"=>$invalid', $source);
+    }
+
+    public function test_smart_duplicate_resolver_reuses_the_current_exact_attachment_without_uploading(): void
+    {
+        $manager = new FakeWordPressMediaManager();
+        $manager->duplicateMatchStrategy = "current";
+        $manager->duplicateMediaId = 12;
+        $store = new WordPressMediaOperationStore();
+        $service = $this->assignmentService($manager, $store);
+        $path = $this->imagePath();
+
+        try {
+            $result = $service->assign(
+                [],
+                MediaInput::local($path, "Existing Portrait.png"),
+                new PostFeaturedImageDestination(501),
+                array_replace($this->assignmentOptions("media:test:dedupe-current:12345678"), ["deduplicate" => true]),
+            );
+
+            $this->assertTrue($result["success"]);
+            $this->assertTrue($result["reused"]);
+            $this->assertSame(12, $result["media_id"]);
+            $this->assertSame("current", $result["match_method"]);
+            $this->assertSame(0, $manager->uploadCalls);
+            $this->assertSame(["current"], $manager->duplicateStrategies);
+            $this->assertContains("deduplicate_current", array_column($result["events"], "stage"));
+            $this->assertContains("deduplicate_fingerprint", array_column($result["events"], "stage"));
+            $this->assertContains("cache_purge", array_column($result["events"], "stage"));
+            $this->assertSame(1, $manager->cachePurgeCalls);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_smart_duplicate_resolver_falls_through_to_legacy_fingerprint_matching(): void
+    {
+        $manager = new FakeWordPressMediaManager();
+        $manager->duplicateMatchStrategy = "fingerprint";
+        $manager->duplicateMediaId = 66;
+        $store = new WordPressMediaOperationStore();
+        $service = $this->assignmentService($manager, $store);
+        $path = $this->imagePath();
+
+        try {
+            $result = $service->assign(
+                [],
+                MediaInput::local($path, "Legacy Portrait.png"),
+                new PostFeaturedImageDestination(501),
+                array_replace($this->assignmentOptions("media:test:dedupe-fingerprint:12345678"), ["deduplicate" => true]),
+            );
+
+            $this->assertTrue($result["success"]);
+            $this->assertTrue($result["reused"]);
+            $this->assertSame(66, $result["media_id"]);
+            $this->assertSame("fingerprint", $result["match_method"]);
+            $this->assertSame(0, $manager->uploadCalls);
+            $this->assertSame(["current", "sha256", "filename", "fingerprint"], $manager->duplicateStrategies);
+
+            $messages = implode("\n", array_column($result["events"], "message"));
+            $this->assertStringContainsString("Method 1/5", $messages);
+            $this->assertStringContainsString("Method 2/5", $messages);
+            $this->assertStringContainsString("Method 3/5 skipped", $messages);
+            $this->assertStringContainsString("Method 4/5", $messages);
+            $this->assertStringContainsString("Method 5/5 matched", $messages);
+            $this->assertStringContainsString("no upload will occur", $messages);
+        } finally {
+            @unlink($path);
+        }
     }
 
     public function test_polling_returns_pending_before_the_operation_starts(): void
@@ -222,13 +293,16 @@ class WordPressMediaAssignmentServiceTest extends TestCase
 
     private function assignmentService(FakeWordPressMediaManager $manager, WordPressMediaOperationStore $store): WordPressMediaAssignmentService
     {
+        $gateway = new WordPressMediaGateway($manager);
+
         return new WordPressMediaAssignmentService(
             new MediaAcquisitionPipeline(
                 new RemoteMediaDownloader(),
                 new ImageInspector(),
                 new TemporaryMediaResourceManager(),
             ),
-            new WordPressMediaGateway($manager),
+            $gateway,
+            new WordPressMediaDuplicateResolver($gateway),
             $store,
         );
     }
@@ -294,11 +368,21 @@ final class RejectingMediaDestination implements WordPressMediaDestination
 
 final class FakeWordPressMediaManager extends WordPressManagerService
 {
+    public ?string $duplicateMatchStrategy = null;
+
+    public int $duplicateMediaId = 66;
+
+    public array $duplicateStrategies = [];
+
+    public int $uploadCalls = 0;
+
     public int $avatarId = 12;
 
     public int $avatarAssignmentCalls = 0;
 
     public int $inspectionCalls = 0;
+
+    public int $cachePurgeCalls = 0;
 
     public bool $mediaFileAvailable = true;
 
@@ -317,8 +401,15 @@ final class FakeWordPressMediaManager extends WordPressManagerService
         return ["success" => true, "label" => "Fake WordPress"];
     }
 
+    public function usesWpToolkit(array $target): bool
+    {
+        return true;
+    }
+
     public function uploadMedia(array $target, string $filePath, string $fileName = "", string $altText = "", string $caption = "", string $description = ""): array
     {
+        $this->uploadCalls++;
+
         return ["success" => true, "media_id" => 77, "url" => "https://example.test/uploads/portrait.png"];
     }
 
@@ -361,8 +452,49 @@ final class FakeWordPressMediaManager extends WordPressManagerService
 
     public function evaluatePhp(array $target, string $php): array
     {
+        if (str_contains($php, "HEXA_POST_CACHE_PURGE:")) {
+            $this->cachePurgeCalls++;
+
+            return [
+                "success" => true,
+                "stdout" => "HEXA_POST_CACHE_PURGE:" . json_encode([
+                    "success" => true,
+                    "message" => "2 post cache action(s) requested.",
+                    "post_id" => 501,
+                    "permalink" => "https://example.test/profile/",
+                    "actions" => ["clean_post_cache", "litespeed_purge_post"],
+                    "warnings" => [],
+                    "litespeed_detected" => true,
+                ]),
+            ];
+        }
+
+        if (str_contains($php, "HEXA_MEDIA_EXACT_MATCH:")) {
+            preg_match('/\$strategy=\'([^\']+)\';/', $php, $match);
+            $strategy = (string) ($match[1] ?? "");
+            $this->duplicateStrategies[] = $strategy;
+            $found = $strategy !== "" && $strategy === $this->duplicateMatchStrategy;
+
+            return [
+                "success" => true,
+                "stdout" => "HEXA_MEDIA_EXACT_MATCH:" . json_encode([
+                    "success" => true,
+                    "found" => $found,
+                    "media_id" => $found ? $this->duplicateMediaId : 0,
+                    "url" => $found ? "https://example.test/uploads/reused-{$this->duplicateMediaId}.png" : "",
+                    "strategy" => $strategy,
+                    "verification" => $found ? "computed_sha256" : "",
+                    "candidate_count" => 1,
+                    "scanned_count" => 1,
+                    "hashed_count" => 1,
+                ]),
+            ];
+        }
+
         if (str_contains($php, "HEXA_MEDIA_INSPECT:")) {
             $this->inspectionCalls++;
+            preg_match('/\$id=(\d+);/', $php, $match);
+            $mediaId = (int) ($match[1] ?? 77);
 
             return [
                 "success" => true,
@@ -371,8 +503,8 @@ final class FakeWordPressMediaManager extends WordPressManagerService
                     "message" => $this->mediaFileAvailable
                         ? "WordPress image attachment and file verified."
                         : "WordPress attachment record exists, but its media file is missing.",
-                    "media_id" => 77,
-                    "url" => "https://example.test/uploads/portrait.png",
+                    "media_id" => $mediaId,
+                    "url" => "https://example.test/uploads/portrait-{$mediaId}.png",
                     "mime_type" => "image/png",
                     "file_exists" => $this->mediaFileAvailable,
                     "bytes" => $this->mediaFileAvailable ? 68 : 0,

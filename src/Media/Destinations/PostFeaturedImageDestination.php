@@ -2,10 +2,11 @@
 
 namespace hexa_package_wordpress\Media\Destinations;
 
+use hexa_package_wordpress\Media\Contracts\CacheAwareWordPressMediaDestination;
 use hexa_package_wordpress\Media\Contracts\WordPressMediaDestination;
 use hexa_package_wordpress\Media\WordPressMediaGateway;
 
-final class PostFeaturedImageDestination implements WordPressMediaDestination
+final class PostFeaturedImageDestination implements WordPressMediaDestination, CacheAwareWordPressMediaDestination
 {
     public function __construct(public readonly int $postId)
     {
@@ -38,6 +39,11 @@ final class PostFeaturedImageDestination implements WordPressMediaDestination
         $state["message"] = $state["success"] ? "Live WordPress featured image state verified." : "WordPress featured image did not verify.";
 
         return $state;
+    }
+
+    public function purgeCache(WordPressMediaGateway $gateway, array $target): array
+    {
+        return $gateway->purgePostCache($target, $this->postId);
     }
 
     public function rollback(WordPressMediaGateway $gateway, array $target, array $previous): array

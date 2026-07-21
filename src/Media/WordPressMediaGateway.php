@@ -84,6 +84,63 @@ final class WordPressMediaGateway
         ];
     }
 
+    public function findExactMatch(array $target, MediaArtifact $artifact, string $strategy, array $hints = []): array
+    {
+        $strategies = ["current", "sha256", "source_url", "filename", "fingerprint"];
+        if (!in_array($strategy, $strategies, true)) {
+            return ["success" => false, "found" => false, "media_id" => 0, "message" => "Unknown WordPress media matching strategy."];
+        }
+        if (!preg_match("/^[a-f0-9]{64}$/", $artifact->sha256)) {
+            return ["success" => false, "found" => false, "media_id" => 0, "message" => "The selected image has no valid SHA-256 fingerprint."];
+        }
+        if (!$this->wordpress->usesWpToolkit($target)) {
+            return [
+                "success" => false,
+                "found" => false,
+                "media_id" => 0,
+                "message" => "Exact WordPress filesystem matching is unavailable for this REST-only connection.",
+            ];
+        }
+
+        $currentMediaId = max(0, (int) ($hints["current_media_id"] ?? 0));
+        $parts = [
+            '$strategy=' . var_export($strategy, true) . ';',
+            '$targetHash=' . var_export(strtolower($artifact->sha256), true) . ';',
+            '$sourceUrl=' . var_export($artifact->sourceUrl, true) . ';',
+            '$filename=' . var_export($artifact->filename, true) . ';',
+            '$mimeType=' . var_export($artifact->mimeType, true) . ';',
+            '$targetBytes=' . $artifact->bytes . ';',
+            '$targetWidth=' . $artifact->width . ';',
+            '$targetHeight=' . $artifact->height . ';',
+            '$currentMediaId=' . $currentMediaId . ';',
+            'global $wpdb;',
+            '$ids=[];$invalid=[];$scanned=0;$hashed=0;$found=0;$url="";$verification="";$matchedBytes=0;$matchedWidth=0;$matchedHeight=0;',
+            'if($strategy==="current"&&$currentMediaId>0){$ids=[$currentMediaId];}',
+            'if($strategy==="sha256"){$ids=get_posts(["post_type"=>"attachment","post_status"=>"inherit","posts_per_page"=>100,"fields"=>"ids","meta_key"=>"_hexa_media_sha256","meta_value"=>$targetHash,"orderby"=>"ID","order"=>"DESC","no_found_rows"=>true]);}',
+            'if($strategy==="source_url"&&$sourceUrl!==""){$ids=array_merge($ids,get_posts(["post_type"=>"attachment","post_status"=>"inherit","posts_per_page"=>100,"fields"=>"ids","meta_key"=>"_hexa_media_source_url","meta_value"=>$sourceUrl,"orderby"=>"ID","order"=>"DESC","no_found_rows"=>true]));$guidIds=$wpdb->get_col($wpdb->prepare("SELECT ID FROM {$wpdb->posts} WHERE post_type=%s AND guid=%s ORDER BY ID DESC LIMIT 100","attachment",$sourceUrl));$ids=array_merge($ids,(array)$guidIds);}',
+            'if($strategy==="filename"&&$filename!==""){$safe=sanitize_file_name($filename);$base=pathinfo($safe,PATHINFO_FILENAME);$slug=sanitize_title($base);$ids=array_merge($ids,get_posts(["post_type"=>"attachment","post_status"=>"inherit","posts_per_page"=>100,"fields"=>"ids","meta_key"=>"_hexa_media_original_filename","meta_value"=>$safe,"orderby"=>"ID","order"=>"DESC","no_found_rows"=>true]));$fileLike="%/".$wpdb->esc_like($safe);$attachedIds=$wpdb->get_col($wpdb->prepare("SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key=%s AND (meta_value=%s OR meta_value LIKE %s) ORDER BY post_id DESC LIMIT 100","_wp_attached_file",$safe,$fileLike));$titleIds=$wpdb->get_col($wpdb->prepare("SELECT ID FROM {$wpdb->posts} WHERE post_type=%s AND (post_name=%s OR post_title=%s) ORDER BY ID DESC LIMIT 100","attachment",$slug,$base));$ids=array_merge($ids,(array)$attachedIds,(array)$titleIds);}',
+            'if($strategy==="fingerprint"){$ids=$wpdb->get_col($wpdb->prepare("SELECT ID FROM {$wpdb->posts} WHERE post_type=%s AND post_status=%s AND post_mime_type=%s ORDER BY ID DESC","attachment","inherit",$mimeType));}',
+            '$ids=array_values(array_unique(array_filter(array_map("intval",(array)$ids))));$candidateCount=count($ids);',
+            'foreach($ids as $id){$scanned++;if($id<=0||!wp_attachment_is_image($id)){$invalid[]=$id;continue;}$file=get_attached_file($id);if(!$file||!is_file($file)||filesize($file)<=0){$invalid[]=$id;continue;}$candidateMime=(string)get_post_mime_type($id);$candidateBytes=(int)filesize($file);$meta=wp_get_attachment_metadata($id);$candidateWidth=(int)($meta["width"]??0);$candidateHeight=(int)($meta["height"]??0);$indexedHash=strtolower(trim((string)get_post_meta($id,"_hexa_media_sha256",true)));if(preg_match("/^[a-f0-9]{64}$/",$indexedHash)&&hash_equals($targetHash,$indexedHash)){$verification="indexed_sha256";}else{if($candidateMime!==$mimeType||$candidateBytes!==$targetBytes||($targetWidth>0&&$candidateWidth>0&&$candidateWidth!==$targetWidth)||($targetHeight>0&&$candidateHeight>0&&$candidateHeight!==$targetHeight)){continue;}$actualHash=@hash_file("sha256",$file);$hashed++;if(!is_string($actualHash)||!hash_equals($targetHash,strtolower($actualHash))){continue;}$verification="computed_sha256";}$found=$id;$url=(string)wp_get_attachment_url($id);$matchedBytes=$candidateBytes;$matchedWidth=$candidateWidth;$matchedHeight=$candidateHeight;update_post_meta($id,"_hexa_media_sha256",$targetHash);if($sourceUrl!==""){update_post_meta($id,"_hexa_media_source_url",$sourceUrl);}if($filename!==""){update_post_meta($id,"_hexa_media_original_filename",$filename);}update_post_meta($id,"_hexa_media_fingerprint_version","2");break;}',
+            'echo "HEXA_MEDIA_EXACT_MATCH:".wp_json_encode(["success"=>true,"found"=>$found>0,"media_id"=>$found,"url"=>$url,"strategy"=>$strategy,"verification"=>$verification,"candidate_count"=>$candidateCount,"scanned_count"=>$scanned,"hashed_count"=>$hashed,"bytes"=>$matchedBytes,"width"=>$matchedWidth,"height"=>$matchedHeight,"invalid_media_ids"=>$invalid]);',
+        ];
+        $result = $this->wordpress->evaluatePhp($target, implode("", $parts));
+        if (!($result["success"] ?? false)) {
+            return [
+                "success" => false,
+                "found" => false,
+                "media_id" => 0,
+                "message" => (string) ($result["message"] ?? "Exact WordPress media lookup failed."),
+            ];
+        }
+
+        $payload = $this->decode((string) ($result["stdout"] ?? ""), "HEXA_MEDIA_EXACT_MATCH:");
+
+        return is_array($payload)
+            ? $payload
+            : ["success" => false, "found" => false, "media_id" => 0, "message" => "Exact WordPress media lookup returned an invalid response."];
+    }
+
     public function findBySha256(array $target, string $sha256): array
     {
         if (!preg_match("/^[a-f0-9]{64}$/", $sha256)) {
@@ -147,6 +204,90 @@ final class WordPressMediaGateway
         $payload = ($result["success"] ?? false) ? $this->decode((string) ($result["stdout"] ?? ""), "HEXA_FEATURED_SET:") : null;
 
         return is_array($payload) ? $payload : ["success" => false, "message" => (string) ($result["message"] ?? "Featured image assignment failed.")];
+    }
+
+    public function purgePostCache(array $target, int $postId): array
+    {
+        if ($postId <= 0) {
+            return ["success" => false, "message" => "A WordPress post ID is required for cache invalidation.", "actions" => []];
+        }
+
+        $parts = [
+            '$postId=' . $postId . ';',
+            '$post=get_post($postId);$actions=[];$warnings=[];',
+            'if(!$post){echo "HEXA_POST_CACHE_PURGE:".wp_json_encode(["success"=>false,"message"=>"WordPress post was not found.","post_id"=>$postId,"actions"=>[]]);return;}',
+            '$permalink=(string)get_permalink($postId);',
+            'if(function_exists("clean_post_cache")){clean_post_cache($postId);$actions[]="clean_post_cache";}',
+            '$active=(array)get_option("active_plugins",[]);$litespeed=in_array("litespeed-cache/litespeed-cache.php",$active,true)||defined("LSCWP_V");',
+            'if($litespeed&&has_action("litespeed_purge_post")){ob_start();do_action("litespeed_purge_post",$postId);ob_end_clean();$actions[]="litespeed_purge_post";}',
+            'elseif($litespeed&&class_exists("LiteSpeed_Cache_API")&&method_exists("LiteSpeed_Cache_API","purge_post")){LiteSpeed_Cache_API::purge_post($postId);$actions[]="litespeed_api_purge_post";}',
+            'elseif($litespeed&&$permalink!==""&&has_action("litespeed_purge_url")){ob_start();do_action("litespeed_purge_url",$permalink);ob_end_clean();$actions[]="litespeed_purge_url";}',
+            'elseif($litespeed){$warnings[]="LiteSpeed was detected, but no targeted purge hook was available in this WordPress context.";}',
+            '$actions=array_values(array_unique($actions));',
+            'echo "HEXA_POST_CACHE_PURGE:".wp_json_encode(["success"=>true,"message"=>count($actions)." post cache action(s) requested.","post_id"=>$postId,"permalink"=>$permalink,"actions"=>$actions,"warnings"=>array_values(array_unique($warnings)),"litespeed_detected"=>$litespeed]);',
+        ];
+        $result = $this->wordpress->evaluatePhp($target, implode("", $parts));
+        $payload = ($result["success"] ?? false)
+            ? $this->decode((string) ($result["stdout"] ?? ""), "HEXA_POST_CACHE_PURGE:")
+            : null;
+
+        if (!is_array($payload)) {
+            $fallback = $this->wordpress->purgeSiteCache($target);
+            if ($fallback["success"] ?? false) {
+                return [
+                    "success" => true,
+                    "message" => "Targeted post cache invalidation was unavailable; the WordPress site cache was purged instead.",
+                    "post_id" => $postId,
+                    "permalink" => "",
+                    "actions" => array_values(array_unique((array) ($fallback["actions"] ?? []))),
+                    "warnings" => array_values(array_filter([(string) ($result["message"] ?? "Targeted post cache response was invalid.")])),
+                    "litespeed_detected" => (bool) ($fallback["litespeed_detected"] ?? false),
+                    "fallback" => "site_cache",
+                ];
+            }
+
+            return [
+                "success" => false,
+                "message" => (string) ($result["message"] ?? $fallback["message"] ?? "WordPress post cache invalidation failed."),
+                "post_id" => $postId,
+                "actions" => [],
+            ];
+        }
+
+        if (!($payload["success"] ?? false)) {
+            return $payload;
+        }
+
+        $actions = array_values(array_unique((array) ($payload["actions"] ?? [])));
+        $warnings = array_values(array_filter((array) ($payload["warnings"] ?? [])));
+        $litespeedDetected = (bool) ($payload["litespeed_detected"] ?? false);
+        $litespeedPurged = count(array_filter($actions, fn ($action) => str_starts_with((string) $action, "litespeed_"))) > 0;
+        $fallback = null;
+
+        if ($litespeedDetected && !$litespeedPurged) {
+            $fallback = $this->wordpress->purgeSiteCache($target);
+            foreach ((array) ($fallback["actions"] ?? []) as $action) {
+                $actions[] = (string) $action;
+            }
+            foreach ((array) ($fallback["warnings"] ?? []) as $warning) {
+                $warnings[] = (string) $warning;
+            }
+            $litespeedPurged = count(array_filter($actions, fn ($action) => str_starts_with((string) $action, "litespeed_"))) > 0;
+        }
+
+        $actions = array_values(array_unique($actions));
+        $warnings = array_values(array_unique(array_filter($warnings)));
+        $success = in_array("clean_post_cache", $actions, true) && (!$litespeedDetected || $litespeedPurged);
+
+        return array_replace($payload, [
+            "success" => $success,
+            "message" => $success
+                ? "WordPress post cache invalidated through " . implode(", ", $actions) . "."
+                : "WordPress saved the destination, but its public page cache could not be fully invalidated.",
+            "actions" => $actions,
+            "warnings" => $warnings,
+            "fallback" => is_array($fallback) ? "site_cache" : "",
+        ]);
     }
 
     public function delete(array $target, int $mediaId): array
