@@ -44,6 +44,8 @@ class WordPressMediaAssignmentServiceTest extends TestCase
             $this->assertSame("simple_local_avatars", $result["destination"]["provider"]);
             $this->assertSame("complete", $store->snapshot($operationId)["state"] ?? null);
             $this->assertContains("verify", array_column($result["events"], "stage"));
+            $this->assertContains("cache_purge", array_column($result["events"], "stage"));
+            $this->assertSame(1, $manager->cachePurgeCalls);
             $this->assertSame([], $manager->deletedMediaIds);
         } finally {
             @unlink($path);
@@ -448,6 +450,19 @@ final class FakeWordPressMediaManager extends WordPressManagerService
         }
 
         return ["success" => true, "provider" => "simple_local_avatars", "stored_media_id" => $this->avatarId];
+    }
+
+    public function purgeSiteCache(array $target): array
+    {
+        $this->cachePurgeCalls++;
+
+        return [
+            "success" => true,
+            "message" => "WordPress site cache invalidated.",
+            "actions" => ["wp_cache_flush", "litespeed_purge_all"],
+            "warnings" => [],
+            "litespeed_detected" => true,
+        ];
     }
 
     public function evaluatePhp(array $target, string $php): array

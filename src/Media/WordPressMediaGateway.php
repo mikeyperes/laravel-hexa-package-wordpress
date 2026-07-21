@@ -290,6 +290,11 @@ final class WordPressMediaGateway
         ]);
     }
 
+    public function purgeSiteCache(array $target): array
+    {
+        return $this->wordpress->purgeSiteCache($target);
+    }
+
     public function delete(array $target, int $mediaId): array
     {
         return $this->wordpress->deleteMedia($target, $mediaId, true);

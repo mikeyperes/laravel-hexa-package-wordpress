@@ -2,10 +2,11 @@
 
 namespace hexa_package_wordpress\Media\Destinations;
 
+use hexa_package_wordpress\Media\Contracts\CacheAwareWordPressMediaDestination;
 use hexa_package_wordpress\Media\Contracts\WordPressMediaDestination;
 use hexa_package_wordpress\Media\WordPressMediaGateway;
 
-final class UserAvatarDestination implements WordPressMediaDestination
+final class UserAvatarDestination implements WordPressMediaDestination, CacheAwareWordPressMediaDestination
 {
     public function __construct(public readonly int $userId)
     {
@@ -58,6 +59,11 @@ final class UserAvatarDestination implements WordPressMediaDestination
             "provider" => $provider,
             "author_url" => (string) ($data["author_url"] ?? ""),
         ];
+    }
+
+    public function purgeCache(WordPressMediaGateway $gateway, array $target): array
+    {
+        return $gateway->purgeSiteCache($target);
     }
 
     public function rollback(WordPressMediaGateway $gateway, array $target, array $previous): array

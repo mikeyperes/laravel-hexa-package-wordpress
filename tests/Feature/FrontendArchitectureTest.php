@@ -138,6 +138,43 @@ class FrontendArchitectureTest extends TestCase
         );
     }
 
+    public function test_avatar_assignment_validates_pixels_and_repairs_corrupt_dynamic_sizes(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $avatars = (string) file_get_contents(
+            $root . '/src/Services/Concerns/WordPressManager/ManagesWordPressAvatars.php',
+        );
+
+        $this->assertStringContainsString('hexa_avatar_image_integrity', $avatars);
+        $this->assertStringContainsString('non_transparent_pixels', $avatars);
+        $this->assertStringContainsString('hexa_rebuild_simple_avatar_sizes', $avatars);
+        $this->assertStringContainsString('fully_transparent', $avatars);
+        $this->assertStringContainsString('corrupt_sizes_regenerated_from_verified_source', $avatars);
+        $this->assertStringContainsString('verified_source_fallback_after_derivative_failure', $avatars);
+        $this->assertStringContainsString('avatar_runtime_warning', $avatars);
+        $this->assertStringContainsString('$avatarIntegrity["cached_sizes"]', $avatars);
+        $this->assertStringContainsString('$previousSimpleMediaId === $mediaId', $avatars);
+        $this->assertStringNotContainsString('$simple->assign_new_user_avatar(', $avatars);
+        $this->assertStringNotContainsString('$simple->avatar_delete(', $avatars);
+        $this->assertStringContainsString('"assignment_reused" => $assignmentReused', $avatars);
+        $this->assertStringContainsString('"avatar_integrity" => $avatarIntegrity', $avatars);
+        $this->assertStringContainsString('"avatar_repair" => $avatarRepair', $avatars);
+    }
+
+    public function test_user_avatar_destination_uses_the_shared_site_cache_purge_contract(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $destination = (string) file_get_contents(
+            $root . '/src/Media/Destinations/UserAvatarDestination.php',
+        );
+        $gateway = (string) file_get_contents($root . '/src/Media/WordPressMediaGateway.php');
+
+        $this->assertStringContainsString('CacheAwareWordPressMediaDestination', $destination);
+        $this->assertStringContainsString('return $gateway->purgeSiteCache($target);', $destination);
+        $this->assertStringContainsString('public function purgeSiteCache(array $target): array', $gateway);
+        $this->assertStringContainsString('return $this->wordpress->purgeSiteCache($target);', $gateway);
+    }
+
     public function test_media_operation_polling_asset_and_route_are_owned_by_wordpress_package(): void
     {
         $assets = app(PackageAssetRegistry::class)->assetsFor("wordpress");
