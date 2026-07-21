@@ -58,6 +58,8 @@ class FrontendArchitectureTest extends TestCase
         $this->assertStringContainsString('data-profile-photo-thumbnail', $panel);
         $this->assertStringContainsString('profilePhotoFullUrl', $panel);
         $this->assertStringContainsString('mergeMediaCandidates:', $panel);
+        $this->assertStringContainsString('applyProfilePhoto:(payload = {}) => bridgeMediaApplyPhoto', $panel);
+        $this->assertStringNotContainsString('applyNotionPhotoToProfile(photo, item = null){ return bridgeMediaApplyPhoto', $panel);
     }
 
     public function test_avatar_payload_resolver_selects_the_smallest_sufficient_thumbnail(): void

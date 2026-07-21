@@ -52,7 +52,7 @@ class WordPressMediaAssignmentServiceTest extends TestCase
         }
     }
 
-    public function test_same_attachment_skips_destructive_provider_rewrite_and_reverifies_file(): void
+    public function test_same_avatar_attachment_revalidates_provider_derivatives_and_file(): void
     {
         $manager = new FakeWordPressMediaManager();
         $manager->avatarId = 77;
@@ -70,10 +70,12 @@ class WordPressMediaAssignmentServiceTest extends TestCase
 
             $this->assertTrue($result["success"]);
             $this->assertSame(77, $result["media_id"]);
-            $this->assertSame(0, $manager->avatarAssignmentCalls);
+            $this->assertSame(1, $manager->avatarAssignmentCalls);
             $this->assertGreaterThanOrEqual(2, $manager->inspectionCalls);
             $assignEvent = collect($result["events"])->firstWhere("stage", "assign");
             $this->assertTrue((bool) ($assignEvent["context"]["already_assigned"] ?? false));
+            $this->assertTrue((bool) ($assignEvent["context"]["revalidated_current"] ?? false));
+            $this->assertContains("avatar_integrity", array_column($result["events"], "stage"));
         } finally {
             @unlink($path);
         }
@@ -449,7 +451,22 @@ final class FakeWordPressMediaManager extends WordPressManagerService
             $this->mediaFileAvailable = false;
         }
 
-        return ["success" => true, "provider" => "simple_local_avatars", "stored_media_id" => $this->avatarId];
+        return [
+            "success" => true,
+            "provider" => "simple_local_avatars",
+            "stored_media_id" => $this->avatarId,
+            "avatar_result" => [
+                "frontend_avatar_url" => "https://example.test/uploads/avatar-96.png",
+                "admin_avatar_url" => "https://example.test/uploads/avatar-250.png",
+                "avatar_repair" => ["attempted" => true, "reason" => "test_repair"],
+                "avatar_integrity" => [
+                    "source" => ["ok" => true],
+                    "96" => ["ok" => true],
+                    "250" => ["ok" => true],
+                    "cached_sizes" => ["96" => ["ok" => true], "250" => ["ok" => true]],
+                ],
+            ],
+        ];
     }
 
     public function purgeSiteCache(array $target): array

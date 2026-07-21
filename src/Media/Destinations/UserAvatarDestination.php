@@ -3,10 +3,11 @@
 namespace hexa_package_wordpress\Media\Destinations;
 
 use hexa_package_wordpress\Media\Contracts\CacheAwareWordPressMediaDestination;
+use hexa_package_wordpress\Media\Contracts\RevalidatesCurrentWordPressMediaDestination;
 use hexa_package_wordpress\Media\Contracts\WordPressMediaDestination;
 use hexa_package_wordpress\Media\WordPressMediaGateway;
 
-final class UserAvatarDestination implements WordPressMediaDestination, CacheAwareWordPressMediaDestination
+final class UserAvatarDestination implements WordPressMediaDestination, CacheAwareWordPressMediaDestination, RevalidatesCurrentWordPressMediaDestination
 {
     public function __construct(public readonly int $userId)
     {

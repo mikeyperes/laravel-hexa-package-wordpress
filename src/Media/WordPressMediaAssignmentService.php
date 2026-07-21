@@ -7,6 +7,7 @@ use hexa_package_media\Data\MediaInput;
 use hexa_package_media\Exceptions\MediaPipelineException;
 use hexa_package_media\MediaAcquisitionPipeline;
 use hexa_package_wordpress\Media\Contracts\CacheAwareWordPressMediaDestination;
+use hexa_package_wordpress\Media\Contracts\RevalidatesCurrentWordPressMediaDestination;
 use hexa_package_wordpress\Media\Contracts\WordPressMediaDestination;
 use RuntimeException;
 use Throwable;
@@ -128,13 +129,18 @@ final class WordPressMediaAssignmentService
             if (!($assigned["success"] ?? false)) {
                 throw new RuntimeException((string) ($assigned["message"] ?? "WordPress media destination assignment failed."));
             }
+            $revalidatedCurrent = $alreadyAssigned && (bool) ($assigned["revalidated_current"] ?? false);
             $this->emit("assign", "ok", $alreadyAssigned
-                ? "Destination already used attachment #{$mediaId}; provider rewrite skipped."
+                ? ($revalidatedCurrent
+                    ? "Destination already used attachment #{$mediaId}; provider state and generated derivatives were revalidated."
+                    : "Destination already used attachment #{$mediaId}; provider rewrite skipped.")
                 : "WordPress accepted the destination assignment.", [
                 "media_id" => $mediaId,
                 "provider" => (string) ($assigned["provider"] ?? $assigned["media"]["provider"] ?? ""),
                 "already_assigned" => $alreadyAssigned,
+                "revalidated_current" => $revalidatedCurrent,
             ]);
+            $this->emitAvatarIntegrity($assigned);
 
             $cache = $this->purgeDestinationCache($target, $destination);
 
@@ -253,13 +259,18 @@ final class WordPressMediaAssignmentService
             if (!($assigned["success"] ?? false)) {
                 throw new RuntimeException((string) ($assigned["message"] ?? "WordPress destination assignment failed."));
             }
+            $revalidatedCurrent = $alreadyAssigned && (bool) ($assigned["revalidated_current"] ?? false);
             $this->emit("assign", "ok", $alreadyAssigned
-                ? "Destination already used attachment #{$mediaId}; provider rewrite skipped."
+                ? ($revalidatedCurrent
+                    ? "Destination already used attachment #{$mediaId}; provider state and generated derivatives were revalidated."
+                    : "Destination already used attachment #{$mediaId}; provider rewrite skipped.")
                 : "WordPress accepted the destination assignment.", [
                 "media_id" => $mediaId,
                 "provider" => (string) ($assigned["provider"] ?? $assigned["media"]["provider"] ?? ""),
                 "already_assigned" => $alreadyAssigned,
+                "revalidated_current" => $revalidatedCurrent,
             ]);
+            $this->emitAvatarIntegrity($assigned);
 
             $cache = $this->purgeDestinationCache($target, $destination);
 
@@ -316,7 +327,8 @@ final class WordPressMediaAssignmentService
         int $mediaId,
         array $previous,
     ): array {
-        if ((int) ($previous["media_id"] ?? 0) === $mediaId) {
+        $alreadyAssigned = (int) ($previous["media_id"] ?? 0) === $mediaId;
+        if ($alreadyAssigned && !$destination instanceof RevalidatesCurrentWordPressMediaDestination) {
             return [
                 "success" => true,
                 "media_id" => $mediaId,
@@ -327,9 +339,34 @@ final class WordPressMediaAssignmentService
         }
 
         $assigned = $destination->assign($this->gateway, $target, $mediaId);
-        $assigned["already_assigned"] = false;
+        $assigned["already_assigned"] = $alreadyAssigned;
+        $assigned["revalidated_current"] = $alreadyAssigned;
 
         return $assigned;
+    }
+
+    private function emitAvatarIntegrity(array $assigned): void
+    {
+        $avatar = (array) ($assigned["avatar_result"] ?? []);
+        if ($avatar === []) {
+            return;
+        }
+
+        $integrity = (array) ($avatar["avatar_integrity"] ?? []);
+        $repair = (array) ($avatar["avatar_repair"] ?? []);
+        $repairAttempted = (bool) ($repair["attempted"] ?? false);
+        $this->emit("avatar_integrity", "ok", $repairAttempted
+            ? "Rebuilt invalid avatar derivatives from the verified source; 96px and 250px outputs passed pixel integrity checks."
+            : "Verified the avatar source and its 96px and 250px derivatives contain visible pixels.", [
+            "repair_attempted" => $repairAttempted,
+            "repair_reason" => (string) ($repair["reason"] ?? "not_required"),
+            "frontend_avatar_url" => (string) ($avatar["frontend_avatar_url"] ?? ""),
+            "admin_avatar_url" => (string) ($avatar["admin_avatar_url"] ?? ""),
+            "source_ok" => (bool) ($integrity["source"]["ok"] ?? false),
+            "size_96_ok" => (bool) ($integrity["96"]["ok"] ?? false),
+            "size_250_ok" => (bool) ($integrity["250"]["ok"] ?? false),
+            "cached_sizes" => array_keys((array) ($integrity["cached_sizes"] ?? [])),
+        ]);
     }
 
     private function purgeDestinationCache(

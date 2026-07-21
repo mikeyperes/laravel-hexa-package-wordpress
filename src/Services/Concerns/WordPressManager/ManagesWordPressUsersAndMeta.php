@@ -127,7 +127,7 @@ trait ManagesWordPressUsersAndMeta
             "avatar_sizes" => (array) ($profileData["avatar_sizes"] ?? []),
             "frontend_avatar_url" => (string) ($avatarMetaResult["frontend_avatar_url"] ?? ""),
             "provider" => (string) ($avatarMetaResult["provider"] ?? $profileData["avatar_provider"] ?? ""),
-        ]];
+        ], "avatar_result" => $avatarMetaResult];
     }
 
     public function updateNativeField(array $target, string $objectType, int $objectId, string $field, string $value): array

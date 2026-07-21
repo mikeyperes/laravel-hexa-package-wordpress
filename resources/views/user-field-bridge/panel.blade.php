@@ -232,7 +232,8 @@
                                                         detectOnlineImage:(payload = {}) => detectBridgeOnlineImage({!! $linkExpr !!}, payload || {}),
                                                         uploadMediaFile:(payload = {}) => uploadBridgeMediaFile({!! $linkExpr !!}, payload || {}),
                                                         uploadFieldPhoto:(payload = {}) => uploadBridgeMediaFile({!! $linkExpr !!}, payload || {}),
-                                                        mergeMediaCandidates:(payload = {}) => bridgeMediaMergeCandidates({!! $linkExpr !!}, payload.candidates || [])
+                                                        mergeMediaCandidates:(payload = {}) => bridgeMediaMergeCandidates({!! $linkExpr !!}, payload.candidates || []),
+                                                        applyProfilePhoto:(payload = {}) => bridgeMediaApplyPhoto({!! $linkExpr !!}, payload.photo, payload.item || null)
                                                     }
                                                 },
                                                 activeSourceId(){ return {!! $linkExpr !!}.id || null },
@@ -270,9 +271,7 @@
                                                 photoSizeText(item, photo){ return bridgeMediaSizeText(item, photo) },
                                                 photoCandidateDetailRows(item, photo){ return bridgeMediaDetailRows(item, photo) },
                                                 photoCandidateWarnings(item){ return bridgeMediaWarnings(item) },
-                                                notionPhotoApplyKey(photo, item){ return bridgeMediaApplyKey({!! $linkExpr !!}, photo, item) },
-                                                applyNotionPhotoToProfile(photo, item = null){ return bridgeMediaApplyPhoto({!! $linkExpr !!}, photo, item) },
-                                                applySelectedUnifiedProfilePhoto(){ return bridgeMediaApplySelected({!! $linkExpr !!}) }
+                                                notionPhotoApplyKey(photo, item){ return bridgeMediaApplyKey({!! $linkExpr !!}, photo, item) }
                                             }" style="min-width:0;">
                                                 @include("notion::partials.media-gallery", [
                                                     "title" => "Generic profile photo gallery bridge",
