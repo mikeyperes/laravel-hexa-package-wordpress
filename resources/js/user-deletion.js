@@ -24,19 +24,43 @@
         return `${name || `WordPress user #${id}`} · WP #${id}`;
     };
 
+    const cachedContentState = (host) => {
+        const rawCount = host && (host.delete_content_count ?? host.delete_post_count ?? host.post_count);
+        const contentCount = Number.parseInt(rawCount, 10);
+        const contentCountKnown = Number.isFinite(contentCount)
+            && !!(host && (host.delete_content_count_known === true || host.post_count_known === true));
+
+        return {
+            contentCount: contentCountKnown ? Math.max(0, contentCount) : null,
+            contentCountKnown,
+        };
+    };
+
     const ensureState = (host) => {
         if (!host || typeof host !== "object") return {};
+        const cached = cachedContentState(host);
         if (!host[STATE_KEY] || typeof host[STATE_KEY] !== "object") {
             host[STATE_KEY] = {
-                contextLoaded: host.delete_context_loaded === true,
-                contentCount: host.delete_content_count ?? host.delete_post_count ?? null,
-                contentCountKnown: host.delete_content_count_known === true,
-                requiresReassignment: host.delete_requires_reassignment ?? host.delete_requires_reassign ?? true,
+                contextLoaded: host.delete_context_loaded === true || cached.contentCountKnown,
+                contentCount: cached.contentCountKnown
+                    ? cached.contentCount
+                    : (host.delete_content_count ?? host.delete_post_count ?? null),
+                contentCountKnown: cached.contentCountKnown || host.delete_content_count_known === true,
+                requiresReassignment: cached.contentCountKnown
+                    ? cached.contentCount > 0
+                    : (host.delete_requires_reassignment ?? host.delete_requires_reassign ?? true),
                 candidateGroups: Array.isArray(host.delete_candidate_groups) ? host.delete_candidate_groups : [],
                 destination: host.delete_reassign_item || null,
             };
         }
-        return host[STATE_KEY];
+        const state = host[STATE_KEY];
+        if (state.contextLoaded !== true && cached.contentCountKnown) {
+            state.contextLoaded = true;
+            state.contentCount = cached.contentCount;
+            state.contentCountKnown = true;
+            state.requiresReassignment = cached.contentCount > 0;
+        }
+        return state;
     };
 
     const syncCompatibilityState = (host) => {

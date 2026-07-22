@@ -33,6 +33,9 @@ class FrontendArchitectureTest extends TestCase
         $this->assertStringContainsString('Assign all existing content to', $view);
         $this->assertStringContainsString('x-hexa-smart-search', $view);
         $this->assertStringContainsString('HexaWordPressUserDeletion', $javascript);
+        $this->assertStringContainsString('host.post_count', $javascript);
+        $this->assertStringContainsString('host.post_count_known === true', $javascript);
+        $this->assertStringContainsString('cachedContentState', $javascript);
         $this->assertStringContainsString('alpineMethods', $javascript);
         $this->assertStringNotContainsString('journalist', strtolower($javascript));
     }
