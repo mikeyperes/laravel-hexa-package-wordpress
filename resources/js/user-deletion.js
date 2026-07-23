@@ -51,6 +51,7 @@
                 requiresReassignment: cached.contentCountKnown
                     ? cached.contentCount > 0
                     : (host.delete_requires_reassignment ?? host.delete_requires_reassign ?? true),
+                candidateContextLoaded: host.delete_candidate_context_loaded === true,
                 candidateGroups: Array.isArray(host.delete_candidate_groups) ? host.delete_candidate_groups : [],
                 destination: host.delete_reassign_item || null,
             };
@@ -74,6 +75,7 @@
         host.delete_content_count_known = state.contentCountKnown === true;
         host.delete_requires_reassignment = state.requiresReassignment !== false;
         host.delete_requires_reassign = state.requiresReassignment !== false;
+        host.delete_candidate_context_loaded = state.candidateContextLoaded === true;
         host.delete_candidate_groups = Array.isArray(state.candidateGroups) ? state.candidateGroups : [];
         host.delete_reassign_item = state.destination || null;
         host.delete_reassign_user_id = state.destination ? String(candidateId(state.destination) || "") : "";
@@ -144,6 +146,7 @@
             state.requiresReassignment = context && context.requires_reassignment !== undefined
                 ? context.requires_reassignment !== false
                 : !(context && context.requires_reassign === false);
+            state.candidateContextLoaded = true;
             state.candidateGroups = normalizeCandidateGroups(context || {});
             syncCompatibilityState(host);
             host.delete_suggestions = context && context.suggestions && typeof context.suggestions === "object"
@@ -159,6 +162,11 @@
         needsReassignment(host) {
             const state = ensureState(host);
             return !(state.contextLoaded === true && state.requiresReassignment === false);
+        },
+
+        needsCandidateContext(host) {
+            const state = ensureState(host);
+            return state.requiresReassignment !== false && state.candidateContextLoaded !== true;
         },
 
         contentCountLabel(host) {
@@ -286,6 +294,7 @@
                 wpUserDeletionApplyContext: (host, context) => api.applyContext(host, context),
                 wpUserDeletionState: (host) => api.state(host),
                 wpUserDeletionNeedsReassignment: (host) => api.needsReassignment(host),
+                wpUserDeletionNeedsCandidateContext: (host) => api.needsCandidateContext(host),
                 wpUserDeletionContentCountLabel: (host) => api.contentCountLabel(host),
                 wpUserDeletionCandidateGroups: (host) => api.candidateGroups(host),
                 wpUserDeletionCandidateMeta: (candidate) => api.candidateMeta(candidate),

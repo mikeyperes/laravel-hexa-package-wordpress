@@ -36,6 +36,9 @@ class FrontendArchitectureTest extends TestCase
         $this->assertStringContainsString('host.content_count', $javascript);
         $this->assertStringContainsString('host.content_count_known === true', $javascript);
         $this->assertStringContainsString('cachedContentState', $javascript);
+        $this->assertStringContainsString('candidateContextLoaded', $javascript);
+        $this->assertStringContainsString('delete_candidate_context_loaded', $javascript);
+        $this->assertStringContainsString('wpUserDeletionNeedsCandidateContext', $javascript);
         $this->assertStringNotContainsString('host.post_count', $javascript);
         $this->assertStringNotContainsString('host.post_count_known', $javascript);
         $this->assertStringContainsString('alpineMethods', $javascript);
