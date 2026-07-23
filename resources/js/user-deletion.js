@@ -25,10 +25,12 @@
     };
 
     const cachedContentState = (host) => {
-        const rawCount = host && (host.delete_content_count ?? host.delete_post_count ?? host.post_count);
+        const rawCount = host && (host.content_count ?? host.delete_content_count);
         const contentCount = Number.parseInt(rawCount, 10);
         const contentCountKnown = Number.isFinite(contentCount)
-            && !!(host && (host.delete_content_count_known === true || host.post_count_known === true));
+            && !!(host && (
+                host.content_count_known === true || host.delete_content_count_known === true
+            ));
 
         return {
             contentCount: contentCountKnown ? Math.max(0, contentCount) : null,
@@ -44,7 +46,7 @@
                 contextLoaded: host.delete_context_loaded === true || cached.contentCountKnown,
                 contentCount: cached.contentCountKnown
                     ? cached.contentCount
-                    : (host.delete_content_count ?? host.delete_post_count ?? null),
+                    : (host.content_count ?? host.delete_content_count ?? null),
                 contentCountKnown: cached.contentCountKnown || host.delete_content_count_known === true,
                 requiresReassignment: cached.contentCountKnown
                     ? cached.contentCount > 0

@@ -60,16 +60,23 @@ class WordPressManagerArchitectureTest extends TestCase
         }
     }
 
-    public function test_bulk_user_inventory_carries_known_post_counts_without_per_row_requests(): void
+    public function test_bulk_user_inventory_carries_distinct_post_and_content_counts_with_real_roles(): void
     {
         $root = dirname(__DIR__, 2);
         $inventory = (string) file_get_contents($root.'/src/Services/Concerns/WordPressManager/ManagesWordPressUserAccounts.php');
         $normalizer = (string) file_get_contents($root.'/src/Services/Concerns/WordPressManager/HandlesWordPressRestAndToolkit.php');
 
+        $this->assertStringContainsString('$args=["fields"=>"all","number"=>9999]', $inventory);
+        $this->assertStringNotContainsString('"user_url","roles"],"number"=>9999', $inventory);
         $this->assertStringContainsString('count_user_posts((int) $user->ID,"post",false)', $inventory);
+        $this->assertStringContainsString('GROUP BY post_author', $inventory);
         $this->assertStringContainsString('"post_count"=>$postCount', $inventory);
         $this->assertStringContainsString('"post_count_known"=>true', $inventory);
+        $this->assertStringContainsString('"content_count"=>$contentCount', $inventory);
+        $this->assertStringContainsString('"content_count_known"=>true', $inventory);
         $this->assertStringContainsString('"post_count" => $postCount', $normalizer);
         $this->assertStringContainsString('"post_count_known" => $postCountKnown', $normalizer);
+        $this->assertStringContainsString('"content_count" => $contentCount', $normalizer);
+        $this->assertStringContainsString('"content_count_known" => $contentCountKnown', $normalizer);
     }
 }

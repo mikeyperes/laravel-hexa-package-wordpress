@@ -253,6 +253,10 @@ PHP;
             && is_numeric($user["post_count"])
             && (!array_key_exists("post_count_known", $user) || (bool) $user["post_count_known"]);
         $postCount = $postCountKnown ? max(0, (int) $user["post_count"]) : null;
+        $contentCountKnown = array_key_exists("content_count", $user)
+            && is_numeric($user["content_count"])
+            && (!array_key_exists("content_count_known", $user) || (bool) $user["content_count_known"]);
+        $contentCount = $contentCountKnown ? max(0, (int) $user["content_count"]) : null;
 
         return [
             "id" => (int) ($user["id"] ?? $user["ID"] ?? 0),
@@ -275,6 +279,8 @@ PHP;
             "wp_admin_url" => (string) ($user["wp_admin_url"] ?? ""),
             "post_count" => $postCount,
             "post_count_known" => $postCountKnown,
+            "content_count" => $contentCount,
+            "content_count_known" => $contentCountKnown,
         ];
     }
 

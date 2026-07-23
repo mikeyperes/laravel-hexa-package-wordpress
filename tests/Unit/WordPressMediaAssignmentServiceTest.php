@@ -72,7 +72,10 @@ class WordPressMediaAssignmentServiceTest extends TestCase
             $this->assertSame(77, $result["media_id"]);
             $this->assertSame(1, $manager->avatarAssignmentCalls);
             $this->assertGreaterThanOrEqual(2, $manager->inspectionCalls);
-            $assignEvent = collect($result["events"])->firstWhere("stage", "assign");
+            $assignEvent = collect($result["events"])->first(
+                fn (array $event): bool => ($event["stage"] ?? "") === "assign"
+                    && ($event["state"] ?? "") === "ok",
+            );
             $this->assertTrue((bool) ($assignEvent["context"]["already_assigned"] ?? false));
             $this->assertTrue((bool) ($assignEvent["context"]["revalidated_current"] ?? false));
             $this->assertContains("avatar_integrity", array_column($result["events"], "stage"));

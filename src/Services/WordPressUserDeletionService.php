@@ -238,6 +238,10 @@ PHP;
         if (!($sourceResult["success"] ?? false) || (int) ($source["id"] ?? $source["ID"] ?? 0) !== $sourceUserId) {
             return ["success" => false, "message" => (string) ($sourceResult["message"] ?? "The WordPress user was not found.")];
         }
+        $contentCountKnown = array_key_exists("content_count", $source)
+            && is_numeric($source["content_count"])
+            && (!array_key_exists("content_count_known", $source) || (bool) $source["content_count_known"]);
+        $contentCount = $contentCountKnown ? max(0, (int) $source["content_count"]) : null;
 
         $loaded = $this->wordpress->listUsers($target, [
             "per_page" => max(20, $limit * 5),
@@ -269,7 +273,7 @@ PHP;
             "success" => true,
             "connection_mode" => "rest",
             "source_user" => $source,
-            "content_count" => null,
+            "content_count" => $contentCount,
             "administrators" => $administrators,
             "top_authors" => [],
             "other_authors" => $otherAuthors,

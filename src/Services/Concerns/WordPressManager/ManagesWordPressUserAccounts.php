@@ -425,8 +425,12 @@ PHP;
         if ($this->usesWpToolkit($target)) {
             $loader = function () use ($target): array {
                 $parts = [
-                    '$args=["fields"=>["ID","display_name","user_login","user_nicename","user_email","user_url","roles"],"number"=>9999];',
+                    'global $wpdb;',
+                    '$args=["fields"=>"all","number"=>9999];',
                     '$users=get_users($args);',
+                    '$contentCounts=[];',
+                    '$contentRows=$wpdb->get_results("SELECT post_author, COUNT(*) AS content_count FROM {$wpdb->posts} WHERE post_type NOT IN (\'revision\',\'nav_menu_item\') GROUP BY post_author",ARRAY_A);',
+                    'foreach ((array) $contentRows as $contentRow) { $authorId=(int) ($contentRow["post_author"] ?? 0); if ($authorId>0) { $contentCounts[$authorId]=(int) ($contentRow["content_count"] ?? 0); } }',
                     '$rows=[];',
                     'foreach ($users as $user) {',
                     '$simpleAvatarPayload=get_user_meta($user->ID,"simple_local_avatar",true);',
@@ -453,7 +457,8 @@ PHP;
                     '$adminUrl=(string) get_edit_user_link($user->ID);',
                     'if ($adminUrl==="") { $adminUrl=(string) admin_url("user-edit.php?user_id=" . (int) $user->ID); }',
                     '$postCount=(int) count_user_posts((int) $user->ID,"post",false);',
-                    '$rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"user_nicename"=>(string) $user->user_nicename,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"user_url"=>(string) $user->user_url,"roles"=>array_values(array_map("strval", (array) $user->roles)),"wp_user_avatar"=>$avatarId>0 ? (string) $avatarId : "","avatar_media_id"=>$avatarId>0 ? (string) $avatarId : "","wp_user_avatars"=>is_scalar($legacyAvatarPayload) ? (string) $legacyAvatarPayload : maybe_serialize($legacyAvatarPayload),"simple_local_avatar"=>is_scalar($simpleAvatarPayload) ? (string) $simpleAvatarPayload : maybe_serialize($simpleAvatarPayload),"avatar_url"=>$avatarUrl,"avatar_thumbnail_url"=>$avatarUrl,"avatar_full_url"=>$avatarFullUrl,"avatar_sizes"=>$numericAvatarUrls,"author_url"=>$authorUrl,"wp_admin_url"=>$adminUrl,"post_count"=>$postCount,"post_count_known"=>true];',
+                    '$contentCount=(int) ($contentCounts[(int) $user->ID] ?? 0);',
+                    '$rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"user_nicename"=>(string) $user->user_nicename,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"user_url"=>(string) $user->user_url,"roles"=>array_values(array_map("strval", (array) $user->roles)),"wp_user_avatar"=>$avatarId>0 ? (string) $avatarId : "","avatar_media_id"=>$avatarId>0 ? (string) $avatarId : "","wp_user_avatars"=>is_scalar($legacyAvatarPayload) ? (string) $legacyAvatarPayload : maybe_serialize($legacyAvatarPayload),"simple_local_avatar"=>is_scalar($simpleAvatarPayload) ? (string) $simpleAvatarPayload : maybe_serialize($simpleAvatarPayload),"avatar_url"=>$avatarUrl,"avatar_thumbnail_url"=>$avatarUrl,"avatar_full_url"=>$avatarFullUrl,"avatar_sizes"=>$numericAvatarUrls,"author_url"=>$authorUrl,"wp_admin_url"=>$adminUrl,"post_count"=>$postCount,"post_count_known"=>true,"content_count"=>$contentCount,"content_count_known"=>true];',
                     '}',
                     'echo "HEXA_USER_LIST:" . wp_json_encode($rows);',
                 ];
@@ -510,7 +515,7 @@ PHP;
         $query = [
             "per_page" => $filters["per_page"],
             "context" => "edit",
-            "_fields" => "id,name,slug,email,url,link,roles,avatar_urls,post_count,post_count_known",
+            "_fields" => "id,name,slug,email,url,link,roles,avatar_urls,post_count,post_count_known,content_count,content_count_known",
         ];
         if ($filters["role"] !== "") {
             $query["roles"] = $filters["role"];
