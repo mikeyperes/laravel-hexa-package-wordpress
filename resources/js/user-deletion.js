@@ -54,6 +54,7 @@
                 candidateContextLoaded: host.delete_candidate_context_loaded === true,
                 candidateGroups: Array.isArray(host.delete_candidate_groups) ? host.delete_candidate_groups : [],
                 destination: host.delete_reassign_item || null,
+                contentAction: host.delete_content_action === "delete" ? "delete" : "reassign",
             };
         }
         const state = host[STATE_KEY];
@@ -77,6 +78,7 @@
         host.delete_requires_reassign = state.requiresReassignment !== false;
         host.delete_candidate_context_loaded = state.candidateContextLoaded === true;
         host.delete_candidate_groups = Array.isArray(state.candidateGroups) ? state.candidateGroups : [];
+        host.delete_content_action = state.contentAction === "delete" ? "delete" : "reassign";
         host.delete_reassign_item = state.destination || null;
         host.delete_reassign_user_id = state.destination ? String(candidateId(state.destination) || "") : "";
         host.delete_reassign_user_label = state.destination ? destinationLabel(state.destination) : "";
@@ -148,6 +150,7 @@
                 : !(context && context.requires_reassign === false);
             state.candidateContextLoaded = true;
             state.candidateGroups = normalizeCandidateGroups(context || {});
+            if (state.requiresReassignment === false) state.contentAction = "reassign";
             syncCompatibilityState(host);
             host.delete_suggestions = context && context.suggestions && typeof context.suggestions === "object"
                 ? context.suggestions
@@ -175,6 +178,34 @@
             if (!Number.isFinite(count)) return "Content count unknown";
             return `${count} content item${count === 1 ? "" : "s"}`;
         },
+
+        contentAction(host) {
+            return ensureState(host).contentAction === "delete" ? "delete" : "reassign";
+        },
+
+        deletesContent(host) {
+            const state = ensureState(host);
+            return state.requiresReassignment !== false && state.contentAction === "delete";
+        },
+
+        setContentAction(host, action, root = null) {
+            const state = ensureState(host);
+            state.contentAction = action === "delete" ? "delete" : "reassign";
+            if (state.contentAction === "delete") {
+                state.destination = null;
+                host.delete_error = false;
+                host.delete_message = "Ready. This user and all content they own will be permanently deleted.";
+            } else {
+                host.delete_error = false;
+                host.delete_message = state.destination
+                    ? `Ready. All existing content will be assigned to ${destinationLabel(state.destination)}.`
+                    : "Choose who receives all existing content.";
+            }
+            syncCompatibilityState(host);
+            dispatchChange(root, host, state.destination);
+            return state.contentAction;
+        },
+
 
         candidateGroups(host) {
             return normalizeCandidateGroups({ candidate_groups: ensureState(host).candidateGroups });
@@ -232,6 +263,7 @@
                 name: name || `WordPress user #${id}`,
             };
             const state = ensureState(host);
+            state.contentAction = "reassign";
             state.destination = destination;
             syncCompatibilityState(host);
             host.delete_error = false;
@@ -259,6 +291,7 @@
             const state = ensureState(host);
             if (state.contextLoaded !== true) return false;
             if (state.requiresReassignment === false) return true;
+            if (state.contentAction === "delete") return true;
             const id = candidateId(state.destination);
             return Number.isFinite(id) && id > 0 && !positiveIds(excludedUserIds).includes(id);
         },
@@ -296,6 +329,9 @@
                 wpUserDeletionNeedsReassignment: (host) => api.needsReassignment(host),
                 wpUserDeletionNeedsCandidateContext: (host) => api.needsCandidateContext(host),
                 wpUserDeletionContentCountLabel: (host) => api.contentCountLabel(host),
+                wpUserDeletionContentAction: (host) => api.contentAction(host),
+                wpUserDeletionDeletesContent: (host) => api.deletesContent(host),
+                wpUserDeletionSetContentAction: (host, action, root) => api.setContentAction(host, action, root),
                 wpUserDeletionCandidateGroups: (host) => api.candidateGroups(host),
                 wpUserDeletionCandidateMeta: (candidate) => api.candidateMeta(candidate),
                 wpUserDeletionSelectedId: (host) => api.selectedId(host),

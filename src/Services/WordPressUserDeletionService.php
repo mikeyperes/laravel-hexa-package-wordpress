@@ -93,25 +93,31 @@ class WordPressUserDeletionService
         }
 
         $requiresReassignment = (bool) ($context["requires_reassignment"] ?? true);
+        $deleteContent = filter_var($options["delete_content"] ?? false, FILTER_VALIDATE_BOOLEAN);
         $destination = null;
 
         if ($requiresReassignment) {
-            if ($reassignUserId === null || $reassignUserId <= 0) {
-                return $this->deleteFailure("Select another WordPress user to receive all existing content before deleting.", $context);
-            }
-            if ($reassignUserId === $sourceUserId) {
-                return $this->deleteFailure("The deleted user cannot receive its own reassigned content.", $context);
-            }
-            if (in_array($reassignUserId, (array) ($context["excluded_user_ids"] ?? []), true)) {
-                return $this->deleteFailure("The selected reassignment user is also scheduled for deletion.", $context);
-            }
+            if ($deleteContent) {
+                $reassignUserId = null;
+            } else {
+                if ($reassignUserId === null || $reassignUserId <= 0) {
+                    return $this->deleteFailure("Select another WordPress user to receive all existing content, or explicitly choose to delete the content.", $context);
+                }
+                if ($reassignUserId === $sourceUserId) {
+                    return $this->deleteFailure("The deleted user cannot receive its own reassigned content.", $context);
+                }
+                if (in_array($reassignUserId, (array) ($context["excluded_user_ids"] ?? []), true)) {
+                    return $this->deleteFailure("The selected reassignment user is also scheduled for deletion.", $context);
+                }
 
-            $destination = $this->destinationUser($target, $reassignUserId);
-            if ($destination === null) {
-                return $this->deleteFailure("The selected reassignment user was not found on this WordPress site.", $context);
+                $destination = $this->destinationUser($target, $reassignUserId);
+                if ($destination === null) {
+                    return $this->deleteFailure("The selected reassignment user was not found on this WordPress site.", $context);
+                }
             }
         } else {
             $reassignUserId = null;
+            $deleteContent = false;
         }
 
         $result = $this->wordpress->deleteUser($target, $sourceUserId, $reassignUserId);
@@ -124,6 +130,8 @@ class WordPressUserDeletionService
             "message" => (string) ($result["message"] ?? "WordPress user deleted."),
             "deleted_user_id" => $sourceUserId,
             "reassigned_to_user_id" => $reassignUserId,
+            "deleted_content" => $deleteContent,
+            "content_action" => $deleteContent ? "delete" : ($reassignUserId ? "reassign" : "none"),
             "destination_user" => $destination,
             "provider_result" => $result,
         ]);

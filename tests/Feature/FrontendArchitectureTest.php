@@ -30,7 +30,9 @@ class FrontendArchitectureTest extends TestCase
 
         $this->assertInstanceOf(WordPressUserDeletionService::class, app(WordPressUserDeletionService::class));
         $this->assertArrayHasKey('user-deletion.js', $assets);
-        $this->assertStringContainsString('Assign all existing content to', $view);
+        $this->assertStringContainsString('Choose what happens to existing content', $view);
+        $this->assertStringContainsString('data-wordpress-user-content-action', $view);
+        $this->assertStringContainsString('data-wordpress-delete-content-choice', $view);
         $this->assertStringContainsString('x-hexa-smart-search', $view);
         $this->assertStringContainsString('HexaWordPressUserDeletion', $javascript);
         $this->assertStringContainsString('host.content_count', $javascript);
@@ -39,6 +41,9 @@ class FrontendArchitectureTest extends TestCase
         $this->assertStringContainsString('candidateContextLoaded', $javascript);
         $this->assertStringContainsString('delete_candidate_context_loaded', $javascript);
         $this->assertStringContainsString('wpUserDeletionNeedsCandidateContext', $javascript);
+        $this->assertStringContainsString('wpUserDeletionDeletesContent', $javascript);
+        $this->assertStringContainsString('wpUserDeletionSetContentAction', $javascript);
+        $this->assertStringContainsString('delete_content_action', $javascript);
         $this->assertStringNotContainsString('host.post_count', $javascript);
         $this->assertStringNotContainsString('host.post_count_known', $javascript);
         $this->assertStringContainsString('alpineMethods', $javascript);
