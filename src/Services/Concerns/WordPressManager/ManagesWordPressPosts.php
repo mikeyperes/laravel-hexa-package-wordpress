@@ -36,8 +36,25 @@ trait ManagesWordPressPosts
             );
 
             if (($result["success"] ?? false) && !empty($result["data"]["post_id"]) && !empty($payload["taxonomies"])) {
-                foreach ((array) $payload["taxonomies"] as $taxonomy => $termIds) {
-                    $this->setPostTerms($target, (int) $result["data"]["post_id"], (string) $taxonomy, (array) $termIds);
+                $postId = (int) $result["data"]["post_id"];
+                $verification = $this->applyToolkitPostTaxonomies(
+                    $target,
+                    $postId,
+                    (array) $payload["taxonomies"],
+                );
+                $result["data"]["taxonomy_verification"] = $verification;
+
+                if (!($verification["success"] ?? false)) {
+                    try {
+                        $rollback = $this->deletePost($target, $postId, true);
+                    } catch (\Throwable $exception) {
+                        $rollback = ["success" => false, "message" => $exception->getMessage()];
+                    }
+
+                    $result["data"]["rollback"] = $rollback;
+                    $result["success"] = false;
+                    $result["message"] = "Post creation was rolled back because taxonomy verification failed: "
+                        . (string) ($verification["message"] ?? "Unknown taxonomy error.");
                 }
             }
 
@@ -61,8 +78,19 @@ trait ManagesWordPressPosts
         if ($this->usesWpToolkit($target)) {
             $result = $this->wptoolkit->wpCliUpdatePost($target["server"], (int) $target["install_id"], $postId, $this->buildToolkitPostData($payload));
             if (($result["success"] ?? false) && !empty($payload["taxonomies"])) {
-                foreach ((array) $payload["taxonomies"] as $taxonomy => $termIds) {
-                    $this->setPostTerms($target, $postId, (string) $taxonomy, (array) $termIds);
+                $verification = $this->applyToolkitPostTaxonomies(
+                    $target,
+                    $postId,
+                    (array) $payload["taxonomies"],
+                );
+                $result["data"] = array_merge((array) ($result["data"] ?? []), [
+                    "taxonomy_verification" => $verification,
+                ]);
+
+                if (!($verification["success"] ?? false)) {
+                    $result["success"] = false;
+                    $result["message"] = "Post fields were updated, but taxonomy verification failed: "
+                        . (string) ($verification["message"] ?? "Unknown taxonomy error.");
                 }
             }
             return $result;
@@ -74,6 +102,69 @@ trait ManagesWordPressPosts
         }
 
         return ["success" => true, "message" => "Post updated via REST.", "data" => $this->formatRestPostData((array) $response["data"])];
+    }
+
+    /**
+     * Apply each taxonomy and require WordPress to confirm the exact term IDs.
+     * A second attempt absorbs transient WP-CLI or object-cache failures.
+     */
+    private function applyToolkitPostTaxonomies(array $target, int $postId, array $taxonomies): array
+    {
+        $verified = [];
+
+        foreach ($taxonomies as $taxonomy => $termIds) {
+            $taxonomy = trim((string) $taxonomy);
+            $expected = array_values(array_unique(array_filter(array_map("intval", (array) $termIds))));
+            sort($expected, SORT_NUMERIC);
+            $lastResult = null;
+
+            for ($attempt = 1; $attempt <= 2; $attempt++) {
+                try {
+                    $assignment = $this->setPostTerms($target, $postId, $taxonomy, $expected);
+                } catch (\Throwable $exception) {
+                    $assignment = [
+                        "success" => false,
+                        "message" => $exception->getMessage(),
+                        "term_ids" => [],
+                    ];
+                }
+
+                $actual = array_values(array_unique(array_map("intval", (array) ($assignment["term_ids"] ?? []))));
+                sort($actual, SORT_NUMERIC);
+                $lastResult = [
+                    "success" => (bool) ($assignment["success"] ?? false) && $actual === $expected,
+                    "attempts" => $attempt,
+                    "expected" => $expected,
+                    "actual" => $actual,
+                    "message" => (string) ($assignment["message"] ?? "Taxonomy assignment failed."),
+                ];
+
+                if ($lastResult["success"]) {
+                    break;
+                }
+            }
+
+            $verified[$taxonomy] = $lastResult;
+            if (!($lastResult["success"] ?? false)) {
+                return [
+                    "success" => false,
+                    "message" => sprintf(
+                        "%s expected [%s] but WordPress confirmed [%s]. %s",
+                        $taxonomy !== "" ? $taxonomy : "Taxonomy",
+                        implode(", ", $expected),
+                        implode(", ", (array) ($lastResult["actual"] ?? [])),
+                        (string) ($lastResult["message"] ?? ""),
+                    ),
+                    "taxonomies" => $verified,
+                ];
+            }
+        }
+
+        return [
+            "success" => true,
+            "message" => "Post taxonomies were assigned and verified.",
+            "taxonomies" => $verified,
+        ];
     }
 
     public function getPost(array $target, int $postId, string $postType = "posts"): array
