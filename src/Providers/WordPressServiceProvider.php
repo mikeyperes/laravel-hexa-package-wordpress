@@ -11,6 +11,7 @@ use hexa_package_wordpress\Acf\AcfStructureRegistry;
 use hexa_package_wordpress\Media\WordPressMediaAssignmentService;
 use hexa_package_wordpress\Media\WordPressMediaGateway;
 use hexa_package_wordpress\Media\WordPressMediaOperationStore;
+use hexa_package_wordpress\SearchConsole\SiteKitTargetAdapter;
 use hexa_package_wordpress\Services\WordPressManagerService;
 use hexa_package_wordpress\Services\WordPressPluginIntegrityService;
 use hexa_package_wordpress\Services\WordPressService;
@@ -37,6 +38,9 @@ class WordPressServiceProvider extends ServiceProvider
         $this->app->singleton(WordPressMediaOperationStore::class);
         $this->app->singleton(WordPressMediaGateway::class);
         $this->app->bind(WordPressMediaAssignmentService::class);
+        if (class_exists(\hexa_package_google_search_console\Domains\Targets\TargetAdapterRegistry::class)) {
+            $this->app->singleton(SiteKitTargetAdapter::class);
+        }
     }
 
     public function boot(): void
@@ -61,5 +65,12 @@ class WordPressServiceProvider extends ServiceProvider
                 "settingsRoute" => "wordpress.index",
             ]);
         }
+
+        $this->app->booted(function (): void {
+            $registryClass = \hexa_package_google_search_console\Domains\Targets\TargetAdapterRegistry::class;
+            if (class_exists($registryClass) && $this->app->bound($registryClass) && $this->app->bound(SiteKitTargetAdapter::class)) {
+                $this->app->make($registryClass)->register($this->app->make(SiteKitTargetAdapter::class));
+            }
+        });
     }
 }

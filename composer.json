@@ -2,7 +2,7 @@
     "name": "hexawebsystems/laravel-hexa-package-wordpress",
     "description": "WordPress - REST API connector for post management, site configuration, and remote content publishing.",
     "type": "library",
-    "version": "2.0.52",
+    "version": "2.0.53",
     "license": "proprietary",
     "require": {
         "php": "^8.2",
@@ -11,6 +11,9 @@
         "hexawebsystems/laravel-hexa-package-user-roles": "*",
         "hexawebsystems/laravel-hexa-package-whm": "*",
         "hexawebsystems/laravel-hexa-package-wptoolkit": "*"
+    },
+    "suggest": {
+        "hexawebsystems/laravel-hexa-package-google-search-console": "Adds the optional WordPress Site Kit target adapter."
     },
     "autoload": {
         "psr-4": {
