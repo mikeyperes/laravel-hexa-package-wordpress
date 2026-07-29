@@ -13,6 +13,7 @@ use hexa_package_wordpress\Services\WordPressService;
 use hexa_package_wordpress\Services\WordPressUserFieldBridgeService;
 use hexa_package_wordpress\Services\WordPressUserDeletionService;
 use hexa_package_wordpress\Services\WordPressUserFieldMap;
+use hexa_package_wordpress\SearchConsole\SiteKitTargetAdapter;
 use hexa_core\Services\PackageRegistryService;
 use hexa_core\Support\PackageAssetRegistry;
 
@@ -37,6 +38,9 @@ class WordPressServiceProvider extends ServiceProvider
         $this->app->singleton(WordPressUserFieldBridgeService::class);
         $this->app->singleton(WordPressUserDeletionService::class);
         $this->app->singleton(WordPressUserFieldMap::class);
+        if (class_exists(\hexa_package_google_search_console\Domains\Targets\TargetAdapterRegistry::class)) {
+            $this->app->singleton(SiteKitTargetAdapter::class);
+        }
     }
 
     /**
@@ -66,5 +70,12 @@ class WordPressServiceProvider extends ServiceProvider
                 'settingsRoute' => 'wordpress.index',
             ]);
         }
+
+        $this->app->booted(function (): void {
+            $registryClass = \hexa_package_google_search_console\Domains\Targets\TargetAdapterRegistry::class;
+            if (class_exists($registryClass) && $this->app->bound($registryClass) && $this->app->bound(SiteKitTargetAdapter::class)) {
+                $this->app->make($registryClass)->register($this->app->make(SiteKitTargetAdapter::class));
+            }
+        });
     }
 }
