@@ -35,7 +35,7 @@ class WordPressPostSnapshotServiceTest extends TestCase
 
         $service = new WordPressPostSnapshotService(
             $wordpress,
-            new WordPressPostSnapshotExtensionRegistry()
+            new WordPressPostSnapshotExtensionRegistry
         );
 
         $snapshot = $service->fetch(['url' => 'https://example.test'], 42);
@@ -69,7 +69,7 @@ class WordPressPostSnapshotServiceTest extends TestCase
             );
         $service = new WordPressPostSnapshotService(
             $wordpress,
-            new WordPressPostSnapshotExtensionRegistry()
+            new WordPressPostSnapshotExtensionRegistry
         );
         $target = ['url' => 'https://cache.example.test'];
 

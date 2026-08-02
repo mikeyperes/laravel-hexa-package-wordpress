@@ -13,7 +13,7 @@ class WordPressPostSnapshotService
     ) {}
 
     /**
-     * @param array<string, mixed> $target
+     * @param  array<string, mixed>  $target
      * @return array<string, mixed>
      */
     public function cached(array $target, int $postId, string $postType = 'post'): array
@@ -64,7 +64,7 @@ class WordPressPostSnapshotService
     /**
      * Backward-compatible live read. Consumers that render a page should call cached() instead.
      *
-     * @param array<string, mixed> $target
+     * @param  array<string, mixed>  $target
      * @return array<string, mixed>
      */
     public function fetch(array $target, int $postId, string $postType = 'post'): array
@@ -73,7 +73,7 @@ class WordPressPostSnapshotService
     }
 
     /**
-     * @param array<string, mixed> $target
+     * @param  array<string, mixed>  $target
      * @return array<string, mixed>
      */
     private function loadRemote(array $target, int $postId, string $postType): array
