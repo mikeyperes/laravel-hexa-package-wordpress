@@ -20,7 +20,7 @@ class WordPressManagerArchitectureTest extends TestCase
             'testWriteAccess', 'inspectPlugin', 'syncPluginFromGitHub',
             'getAcfFieldInventory', 'getAcfValues', 'listAuthors',
             'resolvePreferredTaxonomy', 'listTerms', 'ensureTerms', 'createPost',
-            'updatePost', 'getPost', 'listPosts', 'listMedia', 'getUserProfile',
+            'updatePost', 'getPost', 'getPostSnapshot', 'listPosts', 'listMedia', 'getUserProfile',
             'setUserAvatar', 'updateNativeField', 'updateUserMeta', 'updateOption',
             'updateAcfField', 'normalizeAcfMediaIdList', 'updateAcfGallery',
             'getOption', 'getSiteIcon', 'purgeSiteCache', 'createLetterSiteIcon',
@@ -47,6 +47,19 @@ class WordPressManagerArchitectureTest extends TestCase
             $lines = count(file($file, FILE_IGNORE_NEW_LINES));
             $this->assertLessThan(700, $lines, basename($file));
         }
+    }
+
+    public function test_target_normalization_preserves_absolute_wordpress_paths(): void
+    {
+        $manager = app(WordPressManagerService::class);
+
+        $absolute = $manager->normalizeTarget([
+            'wp_path' => '/home/hexaprwire/public_html/',
+        ]);
+        $default = $manager->normalizeTarget([]);
+
+        $this->assertSame('/home/hexaprwire/public_html', $absolute['wp_path']);
+        $this->assertSame('public_html', $default['wp_path']);
     }
 
     public function test_legacy_traits_are_composition_shims_not_duplicate_implementations(): void

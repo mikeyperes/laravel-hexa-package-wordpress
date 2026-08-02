@@ -182,6 +182,201 @@ trait ManagesWordPressPosts
         return ["success" => true, "message" => "Post fetched via REST.", "data" => $this->formatRestPostData((array) $response["data"])];
     }
 
+    /**
+     * Load a complete, read-only post snapshot for reusable administrative previews.
+     * Raw metadata stays internal so registered extensions can derive provider data.
+     *
+     * @param array<string, mixed> $target
+     * @return array{success: bool, message: string, post: array<string, mixed>|null}
+     */
+    public function getPostSnapshot(array $target, int $postId, string $postType = "post"): array
+    {
+        if ($postId <= 0) {
+            return ["success" => false, "message" => "A WordPress post ID is required.", "post" => null];
+        }
+
+        $target = $this->normalizeTarget($target);
+        if ($this->usesWpToolkit($target)) {
+            $php = <<<'PHP'
+$postId = __POST_ID__;
+$post = get_post($postId);
+if (!$post) {
+    echo "HEXA_POST_SNAPSHOT:" . wp_json_encode(["success" => false, "message" => "WordPress post not found."]);
+    return;
+}
+$author = get_userdata((int) $post->post_author);
+$lastLogin = null;
+if ($author) {
+    foreach (["wfls-last-login", "wp-last-login", "last_login", "last_login_at"] as $lastLoginKey) {
+        $candidate = get_user_meta((int) $author->ID, $lastLoginKey, true);
+        if ($candidate !== "" && $candidate !== null) {
+            $timestamp = is_numeric($candidate) ? (int) $candidate : strtotime((string) $candidate);
+            if ($timestamp > 0) {
+                $lastLogin = wp_date(DATE_ATOM, $timestamp);
+                break;
+            }
+        }
+    }
+}
+$statusObject = get_post_status_object((string) $post->post_status);
+$taxonomies = [];
+foreach ((array) get_object_taxonomies((string) $post->post_type, "objects") as $taxonomy => $taxonomyObject) {
+    $terms = wp_get_object_terms($postId, (string) $taxonomy);
+    if (is_wp_error($terms)) {
+        continue;
+    }
+    $taxonomies[(string) $taxonomy] = [
+        "label" => (string) ($taxonomyObject->label ?? $taxonomy),
+        "terms" => array_values(array_map(static fn ($term): array => [
+            "id" => (int) $term->term_id,
+            "name" => (string) $term->name,
+            "slug" => (string) $term->slug,
+            "parent" => (int) $term->parent,
+        ], (array) $terms)),
+    ];
+}
+$featuredId = (int) get_post_thumbnail_id($postId);
+$featured = null;
+if ($featuredId > 0) {
+    $source = wp_get_attachment_image_src($featuredId, "large");
+    $featured = [
+        "id" => $featuredId,
+        "url" => (string) ($source[0] ?? wp_get_attachment_url($featuredId)),
+        "width" => (int) ($source[1] ?? 0),
+        "height" => (int) ($source[2] ?? 0),
+        "alt" => (string) get_post_meta($featuredId, "_wp_attachment_image_alt", true),
+        "caption" => (string) wp_get_attachment_caption($featuredId),
+    ];
+}
+$meta = [];
+foreach ((array) get_post_meta($postId) as $key => $values) {
+    $decoded = array_map("maybe_unserialize", (array) $values);
+    $meta[(string) $key] = count($decoded) === 1 ? $decoded[0] : array_values($decoded);
+}
+$contentHtml = function_exists("do_blocks") ? do_blocks((string) $post->post_content) : (string) $post->post_content;
+$contentHtml = wpautop($contentHtml);
+$excerptRaw = (string) $post->post_excerpt;
+if ($excerptRaw === "") {
+    $excerptRaw = wp_trim_words(wp_strip_all_tags((string) $post->post_content), 55);
+}
+$payload = [
+    "id" => $postId,
+    "title" => (string) get_the_title($postId),
+    "slug" => (string) $post->post_name,
+    "type" => (string) $post->post_type,
+    "status" => (string) $post->post_status,
+    "status_label" => (string) ($statusObject->label ?? ucfirst((string) $post->post_status)),
+    "content_raw" => (string) $post->post_content,
+    "content_html" => (string) $contentHtml,
+    "excerpt_raw" => (string) $post->post_excerpt,
+    "excerpt_html" => (string) wpautop($excerptRaw),
+    "permalink" => (string) get_permalink($postId),
+    "preview_url" => (string) get_preview_post_link($post),
+    "edit_url" => (string) get_edit_post_link($postId, ""),
+    "date" => $post->post_date !== "0000-00-00 00:00:00" ? mysql2date(DATE_ATOM, $post->post_date, false) : null,
+    "date_gmt" => $post->post_date_gmt !== "0000-00-00 00:00:00" ? mysql2date(DATE_ATOM, $post->post_date_gmt, false) : null,
+    "modified" => $post->post_modified !== "0000-00-00 00:00:00" ? mysql2date(DATE_ATOM, $post->post_modified, false) : null,
+    "modified_gmt" => $post->post_modified_gmt !== "0000-00-00 00:00:00" ? mysql2date(DATE_ATOM, $post->post_modified_gmt, false) : null,
+    "author" => $author ? [
+        "id" => (int) $author->ID,
+        "username" => (string) $author->user_login,
+        "name" => (string) $author->display_name,
+        "email" => (string) $author->user_email,
+        "roles" => array_values(array_map("strval", (array) $author->roles)),
+        "last_login_at" => $lastLogin,
+    ] : null,
+    "featured_image" => $featured,
+    "taxonomies" => $taxonomies,
+    "comment_status" => (string) $post->comment_status,
+    "ping_status" => (string) $post->ping_status,
+    "comment_count" => (int) $post->comment_count,
+    "parent_id" => (int) $post->post_parent,
+    "menu_order" => (int) $post->menu_order,
+    "password_protected" => (string) $post->post_password !== "",
+    "meta" => $meta,
+];
+echo "HEXA_POST_SNAPSHOT:" . wp_json_encode(["success" => true, "post" => $payload]);
+PHP;
+            $result = $this->evaluatePhp(
+                $target,
+                str_replace("__POST_ID__", (string) $postId, $php)
+            );
+            if (! ($result["success"] ?? false)) {
+                return [
+                    "success" => false,
+                    "message" => (string) ($result["message"] ?? "WordPress post snapshot failed."),
+                    "post" => null,
+                ];
+            }
+
+            $payload = $this->decodeMarkedPayload(
+                (string) ($result["stdout"] ?? ""),
+                "HEXA_POST_SNAPSHOT:"
+            );
+            if (! is_array($payload) || ! ($payload["success"] ?? false)) {
+                return [
+                    "success" => false,
+                    "message" => (string) ($payload["message"] ?? "WordPress post snapshot could not be parsed."),
+                    "post" => null,
+                ];
+            }
+
+            return [
+                "success" => true,
+                "message" => "WordPress post snapshot loaded via WP Toolkit.",
+                "post" => (array) ($payload["post"] ?? []),
+            ];
+        }
+
+        $endpoint = trim($postType, "/");
+        $endpoint = $endpoint === "post" ? "posts" : $endpoint;
+        $response = $this->restRequest($target, "get", $endpoint . "/" . $postId, [], ["context" => "edit"]);
+        if (! ($response["success"] ?? false) || ! is_array($response["data"] ?? null)) {
+            return [
+                "success" => false,
+                "message" => (string) ($response["message"] ?? "WordPress REST post snapshot failed."),
+                "post" => null,
+            ];
+        }
+
+        $post = (array) $response["data"];
+        return [
+            "success" => true,
+            "message" => "WordPress post snapshot loaded via REST.",
+            "post" => [
+                "id" => (int) ($post["id"] ?? $postId),
+                "title" => (string) data_get($post, "title.rendered", data_get($post, "title.raw", "")),
+                "slug" => (string) ($post["slug"] ?? ""),
+                "type" => (string) ($post["type"] ?? $postType),
+                "status" => (string) ($post["status"] ?? ""),
+                "status_label" => ucfirst((string) ($post["status"] ?? "unknown")),
+                "content_raw" => (string) data_get($post, "content.raw", ""),
+                "content_html" => (string) data_get($post, "content.rendered", ""),
+                "excerpt_raw" => (string) data_get($post, "excerpt.raw", ""),
+                "excerpt_html" => (string) data_get($post, "excerpt.rendered", ""),
+                "permalink" => (string) ($post["link"] ?? ""),
+                "preview_url" => (string) data_get($post, "_links.preview.0.href", ""),
+                "edit_url" => "",
+                "date" => $post["date"] ?? null,
+                "date_gmt" => $post["date_gmt"] ?? null,
+                "modified" => $post["modified"] ?? null,
+                "modified_gmt" => $post["modified_gmt"] ?? null,
+                "author" => ["id" => (int) ($post["author"] ?? 0)],
+                "featured_image" => isset($post["featured_media"])
+                    ? ["id" => (int) $post["featured_media"]]
+                    : null,
+                "taxonomies" => [],
+                "comment_status" => (string) ($post["comment_status"] ?? ""),
+                "ping_status" => (string) ($post["ping_status"] ?? ""),
+                "comment_count" => 0,
+                "parent_id" => (int) ($post["parent"] ?? 0),
+                "menu_order" => (int) ($post["menu_order"] ?? 0),
+                "password_protected" => (string) ($post["password"] ?? "") !== "",
+                "meta" => (array) ($post["meta"] ?? []),
+            ],
+        ];
+    }
+
     public function listPosts(array $target, array $query = [], string $postType = "posts"): array
     {
         $target = $this->normalizeTarget($target);

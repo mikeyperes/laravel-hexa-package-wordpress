@@ -187,7 +187,7 @@ trait ManagesWordPressUserAccounts
         ];
     }
 
-    public function generateLoginUrl(array $target, string $wpUser): array
+    public function generateLoginUrl(array $target, string $wpUser, string $redirectPath = ""): array
     {
         $target = $this->normalizeTarget($target);
         if (!$this->usesWpToolkit($target)) {
@@ -202,7 +202,8 @@ trait ManagesWordPressUserAccounts
             (string) $target["wp_path"],
             (string) $target["cpanel_user"],
             $wpUser,
-            (string) $target["url"]
+            (string) $target["url"],
+            $redirectPath
         );
     }
 

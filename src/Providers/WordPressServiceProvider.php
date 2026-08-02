@@ -3,6 +3,7 @@
 namespace hexa_package_wordpress\Providers;
 
 use hexa_core\Services\PackageRegistryService;
+use hexa_core\Services\DocumentationService;
 use hexa_core\Support\PackageAssetRegistry;
 use hexa_package_wordpress\Acf\AcfEducationMetadataService;
 use hexa_package_wordpress\Acf\AcfRepeaterNormalizer;
@@ -13,6 +14,9 @@ use hexa_package_wordpress\Media\WordPressMediaGateway;
 use hexa_package_wordpress\Media\WordPressMediaOperationStore;
 use hexa_package_wordpress\SearchConsole\SiteKitTargetAdapter;
 use hexa_package_wordpress\Services\WordPressManagerService;
+use hexa_package_wordpress\Services\WordPressLoginUrlService;
+use hexa_package_wordpress\Services\WordPressPostSnapshotExtensionRegistry;
+use hexa_package_wordpress\Services\WordPressPostSnapshotService;
 use hexa_package_wordpress\Services\WordPressPluginIntegrityService;
 use hexa_package_wordpress\Services\WordPressService;
 use hexa_package_wordpress\Services\WordPressUserDeletionService;
@@ -31,6 +35,9 @@ class WordPressServiceProvider extends ServiceProvider
         $this->app->singleton(AcfSmartTypeResolver::class);
         $this->app->singleton(WordPressService::class);
         $this->app->singleton(WordPressManagerService::class);
+        $this->app->singleton(WordPressLoginUrlService::class);
+        $this->app->singleton(WordPressPostSnapshotExtensionRegistry::class);
+        $this->app->singleton(WordPressPostSnapshotService::class);
         $this->app->singleton(WordPressPluginIntegrityService::class);
         $this->app->singleton(WordPressUserFieldBridgeService::class);
         $this->app->singleton(WordPressUserDeletionService::class);
@@ -50,6 +57,8 @@ class WordPressServiceProvider extends ServiceProvider
 
         app(PackageAssetRegistry::class)->register("wordpress", dirname(__DIR__, 2) . "/resources/js", [
             "media-operations.js",
+            "post-workspace.js",
+            "post-workspace.css",
             "raw.js",
             "user-deletion.js",
         ]);
@@ -72,5 +81,38 @@ class WordPressServiceProvider extends ServiceProvider
                 $this->app->make($registryClass)->register($this->app->make(SiteKitTargetAdapter::class));
             }
         });
+
+        $this->registerDocumentation();
+    }
+
+    private function registerDocumentation(): void
+    {
+        if (! class_exists(DocumentationService::class)) {
+            return;
+        }
+
+        try {
+            app(DocumentationService::class)->register(
+                'wordpress-post-workspaces',
+                'WordPress Post Workspaces',
+                'hexawebsystems/laravel-hexa-package-wordpress',
+                [
+                    [
+                        'title' => 'Reusable post snapshots',
+                        'content' => '<p><code>WordPressPostSnapshotService</code> loads standard post fields, author activity, taxonomies, featured media, content, status, timestamps, and registered extension data through REST or WP Toolkit. Raw post metadata remains server-side.</p>',
+                    ],
+                    [
+                        'title' => 'Provider extensions',
+                        'content' => '<p>Provider packages implement <code>WordPressPostSnapshotExtension</code> and register with <code>WordPressPostSnapshotExtensionRegistry</code>. This exposes provider-owned deliverables without adding provider names or metadata rules to the generic WordPress reader.</p>',
+                    ],
+                    [
+                        'title' => 'Preview and secure access',
+                        'content' => '<p>The <code>wordpress::post-workspace.shell</code> view and package assets render live refresh, a sandboxed content preview, post metadata, login activity, and extension output. <code>WordPressLoginUrlService</code> validates the WP Toolkit install, cPanel root, HTTPS host, WordPress account, and returned one-time URL before a consumer redirects.</p>',
+                    ],
+                ],
+                'package'
+            );
+        } catch (\Throwable) {
+        }
     }
 }

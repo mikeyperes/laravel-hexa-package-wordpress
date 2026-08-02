@@ -45,6 +45,12 @@ class WordPressManagerService
         if ($mode === "") {
             $mode = ($server instanceof WhmServer && $installId > 0) ? "wptoolkit" : "rest";
         }
+        $wpPath = trim((string) ($target["wp_path"] ?? $target["wordpress_path"] ?? "public_html"));
+        if ($wpPath === "") {
+            $wpPath = "public_html";
+        } elseif ($wpPath !== "/") {
+            $wpPath = rtrim($wpPath, "/");
+        }
 
         return [
             "mode" => $mode === "wptoolkit" ? "wptoolkit" : "rest",
@@ -55,7 +61,7 @@ class WordPressManagerService
             "server" => $server instanceof WhmServer ? $server : null,
             "install_id" => $installId > 0 ? $installId : null,
             "cpanel_user" => (string) ($target["cpanel_user"] ?? $target["cpanel_username"] ?? ""),
-            "wp_path" => trim((string) ($target["wp_path"] ?? $target["wordpress_path"] ?? "public_html"), "/"),
+            "wp_path" => $wpPath,
             "default_author" => (string) ($target["default_author"] ?? ""),
             "site_id" => isset($target["site_id"]) ? (int) $target["site_id"] : null,
         ];
