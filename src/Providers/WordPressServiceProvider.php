@@ -99,7 +99,7 @@ class WordPressServiceProvider extends ServiceProvider
                 [
                     [
                         'title' => 'Reusable post snapshots',
-                        'content' => '<p><code>WordPressPostSnapshotService</code> loads standard post fields, author activity, taxonomies, featured media, content, status, timestamps, and registered extension data through REST or WP Toolkit. Raw post metadata remains server-side.</p>',
+                        'content' => '<p><code>WordPressPostSnapshotService::cached()</code> returns the persistent post snapshot without contacting WordPress. Only an explicit <code>refresh()</code> call performs the remote read and rebuilds the cache. A failed refresh retains the prior snapshot. Standard post fields, author activity, taxonomies, featured media, content, status, timestamps, and registered extension data are supported; raw post metadata remains server-side.</p>',
                     ],
                     [
                         'title' => 'Provider extensions',
@@ -107,7 +107,7 @@ class WordPressServiceProvider extends ServiceProvider
                     ],
                     [
                         'title' => 'Preview and secure access',
-                        'content' => '<p>The <code>wordpress::post-workspace.shell</code> view and package assets render live refresh, a sandboxed content preview, post metadata, login activity, and extension output. <code>WordPressLoginUrlService</code> validates the WP Toolkit install, cPanel root, HTTPS host, WordPress account, and returned one-time URL before a consumer redirects.</p>',
+                        'content' => '<p>The <code>wordpress::post-workspace.shell</code> view renders a consumer-supplied cached snapshot immediately, with no initial loader or WordPress request. Its CSRF-protected Refresh action rebuilds the cache and shows relative cache age. The workspace also provides a sandboxed content preview, post metadata, login activity, and extension output. <code>WordPressLoginUrlService</code> validates the WP Toolkit install, cPanel root, HTTPS host, WordPress account, and returned one-time URL before a consumer redirects.</p>',
                     ],
                 ],
                 'package'

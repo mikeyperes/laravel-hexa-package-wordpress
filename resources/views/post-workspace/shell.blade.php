@@ -4,6 +4,16 @@
     $postUrl ??= null;
     $dashboardLoginUrl ??= null;
     $editorLoginUrl ??= null;
+    $initialWorkspace = is_array($initialWorkspace ?? null) ? $initialWorkspace : [];
+    $initialPost = is_array($initialWorkspace['post'] ?? null) ? $initialWorkspace['post'] : [];
+    $hasCachedSnapshot = (bool) ($initialWorkspace['success'] ?? false) && $initialPost !== [];
+    $initialStatus = $hasCachedSnapshot
+        ? (string) ($initialPost['status_label'] ?? $initialPost['status'] ?? 'Cached')
+        : 'Not cached';
+    $initialStatusTone = $hasCachedSnapshot
+        ? (($initialPost['status'] ?? null) === 'publish' ? 'published' : ($initialPost['status'] ?? 'pending'))
+        : 'pending';
+    $cacheRebuiltAt = $initialWorkspace['cache_rebuilt_at'] ?? null;
 @endphp
 
 @once
@@ -22,7 +32,12 @@
 <section id="{{ $workspaceId }}" class="hwp-workspace"
     data-wordpress-post-workspace
     data-refresh-url="{{ $refreshUrl }}"
+    data-csrf-token="{{ csrf_token() }}"
     data-post-id="{{ $postId }}">
+    <script type="application/json" data-wordpress-initial-workspace>{!! json_encode(
+        $initialWorkspace,
+        JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES
+    ) !!}</script>
     <header class="hwp-workspace__header">
         <div class="hwp-workspace__identity">
             <span class="hwp-workspace__mark" aria-hidden="true">WP</span>
@@ -33,10 +48,12 @@
             </span>
         </div>
         <div class="hwp-workspace__state">
-            <span class="hwp-workspace__status hwp-workspace__status--loading" data-wordpress-post-status>
-                Loading
+            <span class="hwp-workspace__status hwp-workspace__status--{{ $initialStatusTone }}" data-wordpress-post-status>
+                {{ $initialStatus }}
             </span>
-            <span data-wordpress-post-updated>Waiting for the first refresh</span>
+            <span data-wordpress-post-updated>
+                {{ $cacheRebuiltAt ? 'Cache rebuilt '.\Illuminate\Support\Carbon::parse($cacheRebuiltAt)->diffForHumans() : 'Cache has not been built' }}
+            </span>
         </div>
     </header>
 
@@ -72,14 +89,14 @@
         @endif
     </div>
     <p class="hwp-workspace__activity" data-wordpress-post-activity role="status" aria-live="polite">
-        Connecting to WordPress and loading the latest post state...
+        {{ $hasCachedSnapshot
+            ? 'Showing the latest saved snapshot. WordPress is contacted only when Refresh post is pressed.'
+            : 'No cached snapshot exists. Press Refresh post to contact WordPress and build one.' }}
     </p>
 
     <div class="hwp-workspace__content" data-wordpress-post-content>
-        <div class="hwp-workspace__loading">
-            <span class="hwp-workspace__spinner" aria-hidden="true"></span>
-            <strong>Fetching post, metadata, and deliverables</strong>
-            <small>This reads the current state directly from WordPress.</small>
-        </div>
+        @unless($hasCachedSnapshot)
+            <p class="hwp-workspace__empty">The post preview will appear here after the first manual refresh.</p>
+        @endunless
     </div>
 </section>

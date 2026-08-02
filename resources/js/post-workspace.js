@@ -185,11 +185,43 @@
         const status = root.querySelector('[data-wordpress-post-status]');
         const updated = root.querySelector('[data-wordpress-post-updated]');
         const postLink = root.querySelector('[data-wordpress-post-link]');
-        let refreshedAt = null;
+        const initialPayload = root.querySelector('[data-wordpress-initial-workspace]');
+        let cacheRebuiltAt = null;
 
         const updateRelativeTime = () => {
-            if (refreshedAt) updated.textContent = 'Last refreshed ' + relativeTime(refreshedAt);
+            updated.textContent = cacheRebuiltAt
+                ? 'Cache rebuilt ' + relativeTime(cacheRebuiltAt)
+                : 'Cache has not been built';
         };
+
+        const renderWorkspace = (workspace) => {
+            if (!workspace?.post) return false;
+            const post = workspace.post;
+            status.textContent = post.status_label || post.status || 'Unknown';
+            status.className = 'hwp-workspace__status hwp-workspace__status--'
+                + (post.status === 'publish' ? 'published' : (post.status || 'pending'));
+            if (post.permalink) {
+                postLink.href = post.permalink;
+                postLink.classList.remove('hidden');
+            }
+            content.replaceChildren();
+            const grid = create('div', 'hwp-workspace__grid');
+            grid.append(renderPreview(post), renderDetails(workspace));
+            content.append(grid);
+            cacheRebuiltAt = workspace.cache_rebuilt_at || workspace.refreshed_at || null;
+            updateRelativeTime();
+            return true;
+        };
+
+        let initialWorkspace = null;
+        try {
+            initialWorkspace = JSON.parse(initialPayload?.textContent || 'null');
+        } catch (error) {
+            initialWorkspace = null;
+        }
+        if (renderWorkspace(initialWorkspace)) {
+            activity.textContent = 'Showing the latest saved snapshot. WordPress is contacted only when Refresh post is pressed.';
+        }
 
         const load = async () => {
             if (root.dataset.loading === '1') return;
@@ -202,29 +234,28 @@
 
             try {
                 const response = await fetch(root.dataset.refreshUrl, {
+                    method: 'POST',
                     credentials: 'same-origin',
-                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    headers: {
+                        Accept: 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': root.dataset.csrfToken || '',
+                    },
                 });
                 const payload = await response.json();
                 if (!response.ok || payload.success === false || !payload.workspace?.post) {
                     throw new Error(payload.message || 'The WordPress workspace could not be refreshed.');
                 }
                 const workspace = payload.workspace;
-                const post = workspace.post;
-                status.textContent = post.status_label || post.status || 'Unknown';
-                status.className = 'hwp-workspace__status hwp-workspace__status--'
-                    + (post.status === 'publish' ? 'published' : (post.status || 'pending'));
-                if (post.permalink) {
-                    postLink.href = post.permalink;
-                    postLink.classList.remove('hidden');
+                renderWorkspace(workspace);
+                if (workspace.refresh_succeeded === false) {
+                    activity.className = 'hwp-workspace__activity is-error';
+                    activity.textContent = workspace.refresh_error
+                        ? 'Refresh failed; the previous cache remains visible. ' + workspace.refresh_error
+                        : 'Refresh failed; the previous cache remains visible.';
+                } else {
+                    activity.textContent = payload.message || 'WordPress cache rebuilt successfully.';
                 }
-                content.replaceChildren();
-                const grid = create('div', 'hwp-workspace__grid');
-                grid.append(renderPreview(post), renderDetails(workspace));
-                content.append(grid);
-                refreshedAt = workspace.refreshed_at || new Date().toISOString();
-                updateRelativeTime();
-                activity.textContent = payload.message || 'WordPress post refreshed successfully.';
             } catch (error) {
                 activity.className = 'hwp-workspace__activity is-error';
                 activity.textContent = error.message || 'The WordPress workspace could not be refreshed.';
@@ -274,7 +305,6 @@
             });
         });
         window.setInterval(updateRelativeTime, 30000);
-        load();
     };
 
     const boot = () => document.querySelectorAll('[data-wordpress-post-workspace]').forEach(initialize);
