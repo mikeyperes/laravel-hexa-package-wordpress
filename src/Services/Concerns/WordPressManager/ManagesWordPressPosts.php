@@ -383,15 +383,18 @@ PHP;
 
         if ($this->usesWpToolkit($target)) {
             $cliPostType = $postType === "posts" ? "post" : rtrim($postType, "s");
+            $authorId = max(0, (int) ($query["author"] ?? 0));
+            $perPage = max(1, min(100, (int) ($query["per_page"] ?? 100)));
             $parts = [
                 '$args=[',
                 '"post_type"=>' . var_export($cliPostType, true) . ',',
                 '"post_status"=>' . var_export((string) ($query["status"] ?? "any"), true) . ',',
-                '"posts_per_page"=>' . (int) ($query["per_page"] ?? 100) . ',',
+                '"posts_per_page"=>' . $perPage . ',',
                 '"orderby"=>' . var_export((string) ($query["orderby"] ?? "date"), true) . ',',
                 '"order"=>' . var_export(strtoupper((string) ($query["order"] ?? "DESC")), true) . ',',
                 '"fields"=>"ids",',
                 '];',
+                'if (' . $authorId . '>0) { $args["author"]=' . $authorId . '; }',
                 '$dateQuery=[];',
                 'if (' . var_export(!empty($query["after"]), true) . ') { $dateQuery[]=["after"=>' . var_export((string) ($query["after"] ?? ""), true) . ']; }',
                 'if (' . var_export(!empty($query["before"]), true) . ') { $dateQuery[]=["before"=>' . var_export((string) ($query["before"] ?? ""), true) . ']; }',
@@ -404,8 +407,10 @@ PHP;
                 '    "date"=>(string) get_post_field("post_date", $postId),',
                 '    "status"=>(string) get_post_status($postId),',
                 '    "link"=>(string) get_permalink($postId),',
+                '    "edit_url"=>(string) get_edit_post_link($postId, "raw"),',
                 '    "slug"=>(string) get_post_field("post_name", $postId),',
                 '    "title"=>["rendered"=>(string) get_the_title($postId)],',
+                '    "author"=>(int) get_post_field("post_author", $postId),',
                 '  ];',
                 '}',
                 'echo "HEXA_POST_LIST:" . wp_json_encode($rows);',
