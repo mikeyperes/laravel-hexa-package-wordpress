@@ -4,6 +4,7 @@ namespace HexaPackageSmokeTests\LaravelHexaPackageWordpress;
 
 use hexa_core\Support\PackageAssetRegistry;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressAvatars;
+use hexa_package_wordpress\Services\WordPressManagerService;
 use hexa_package_wordpress\Services\WordPressUserDeletionService;
 use Tests\TestCase;
 
@@ -77,9 +78,7 @@ class FrontendArchitectureTest extends TestCase
 
     public function test_avatar_payload_resolver_selects_the_smallest_sufficient_thumbnail(): void
     {
-        $resolver = new class {
-            use ManagesWordPressAvatars;
-        };
+        $resolver = app(WordPressManagerService::class);
         $payload = serialize([
             'media_id' => 55761,
             96 => 'https://example.test/photo-150x150.png',
@@ -95,6 +94,30 @@ class FrontendArchitectureTest extends TestCase
         $this->assertSame(250, $resolved['selected_size']);
         $this->assertSame(55761, $resolved['media_id']);
     }
+
+    public function test_avatar_payload_deserialization_never_instantiates_objects(): void
+    {
+        $resolver = new class {
+            use ManagesWordPressAvatars;
+        };
+        AvatarPayloadObjectProbe::$awakened = false;
+
+        $resolved = $resolver->resolveUserAvatarPayload(serialize(new AvatarPayloadObjectProbe()), 96);
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 2) . '/src/Services/Concerns/WordPressManager/ManagesWordPressAvatars.php',
+        );
+
+        $this->assertFalse(AvatarPayloadObjectProbe::$awakened);
+        $this->assertSame('', $resolved['url']);
+        $this->assertSame(0, $resolved['media_id']);
+        $this->assertSame(
+            3,
+            substr_count($source, '@unserialize($data, ["allowed_classes" => false])'),
+            'Both remote runtime decoders and the local decoder must reject serialized classes.',
+        );
+        $this->assertStringNotContainsString('@unserialize($data);', $source);
+    }
+
     public function test_provider_aware_avatar_reads_do_not_fall_back_to_stale_legacy_metadata(): void
     {
         $resolver = new class {
@@ -204,4 +227,14 @@ class FrontendArchitectureTest extends TestCase
         $this->assertStringContainsString("wordpress.media-operations.show", $routes);
     }
 
+}
+
+final class AvatarPayloadObjectProbe
+{
+    public static bool $awakened = false;
+
+    public function __wakeup(): void
+    {
+        self::$awakened = true;
+    }
 }

@@ -21,7 +21,7 @@ if (!function_exists("hexa_avatar_payload_url")) {
     function hexa_avatar_payload_url($payload): string {
         $data = $payload;
         for ($i = 0; $i < 3 && is_string($data) && $data !== ""; $i++) {
-            $decoded = @unserialize($data);
+            $decoded = @unserialize($data, ["allowed_classes" => false]);
             if ($decoded === false && $data !== "b:0;") break;
             $data = $decoded;
         }
@@ -36,7 +36,7 @@ if (!function_exists("hexa_avatar_payload_media_id")) {
     function hexa_avatar_payload_media_id($payload): int {
         $data = $payload;
         for ($i = 0; $i < 3 && is_string($data) && $data !== ""; $i++) {
-            $decoded = @unserialize($data);
+            $decoded = @unserialize($data, ["allowed_classes" => false]);
             if ($decoded === false && $data !== "b:0;") break;
             $data = $decoded;
         }
