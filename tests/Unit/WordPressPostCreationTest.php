@@ -12,7 +12,7 @@ class WordPressPostCreationTest extends TestCase
         $excerpt = 'A unique excerpt with "quotes", an apostrophe, and exact punctuation.';
         $manager = new FakeWordPressPostCreationManager([
             'success' => true,
-            'stdout' => 'HEXA_TOOLKIT_CREATE:' . json_encode([
+            'stdout' => 'HEXA_TOOLKIT_CREATE:'.json_encode([
                 'success' => true,
                 'data' => [
                     'post_id' => 991,
@@ -61,6 +61,7 @@ class WordPressPostCreationTest extends TestCase
         $this->assertStringContainsString('hash("sha256", (string) $state["post_content"])', $manager->evaluatedPhp);
         $this->assertStringContainsString('sanitize_title((string) ($payload[$source]', $manager->evaluatedPhp);
         $this->assertStringContainsString("'author' => 'campaign-editor'", $manager->evaluatedPhp);
+        $this->assertMatchesRegularExpression("/'featured_media' => true,\\s+'author' => true,\\s+'categories' => true,/", $manager->evaluatedPhp);
         $this->assertStringContainsString("'categories' =>", $manager->evaluatedPhp);
         $this->assertStringContainsString("'tags' =>", $manager->evaluatedPhp);
         $this->assertStringContainsString("'publication' =>", $manager->evaluatedPhp);
@@ -88,7 +89,7 @@ class WordPressPostCreationTest extends TestCase
     {
         $manager = new FakeWordPressPostCreationManager([
             'success' => true,
-            'stdout' => 'HEXA_TOOLKIT_UPDATE:' . json_encode([
+            'stdout' => 'HEXA_TOOLKIT_UPDATE:'.json_encode([
                 'success' => true,
                 'data' => [
                     'post_id' => 77,
@@ -116,7 +117,7 @@ class WordPressPostCreationTest extends TestCase
     {
         $manager = new FakeWordPressPostCreationManager([
             'success' => true,
-            'stdout' => 'HEXA_TOOLKIT_CREATE:' . json_encode([
+            'stdout' => 'HEXA_TOOLKIT_CREATE:'.json_encode([
                 'success' => false,
                 'message' => 'WordPress post verification failed during staging: post_excerpt.',
                 'data' => [
@@ -148,7 +149,7 @@ class WordPressPostCreationTest extends TestCase
     {
         $manager = new FakeWordPressPostCreationManager([
             'success' => true,
-            'stdout' => 'HEXA_TOOLKIT_CREATE:' . json_encode([
+            'stdout' => 'HEXA_TOOLKIT_CREATE:'.json_encode([
                 'success' => true,
                 'data' => [
                     'post_id' => 993,
@@ -175,7 +176,7 @@ class WordPressPostCreationTest extends TestCase
     {
         $manager = new FakeWordPressPostCreationManager([
             'success' => true,
-            'stdout' => 'HEXA_TOOLKIT_UPDATE:' . json_encode([
+            'stdout' => 'HEXA_TOOLKIT_UPDATE:'.json_encode([
                 'success' => false,
                 'message' => 'WordPress changed one or more fields while finalizing the post: post_content.',
                 'data' => [
@@ -249,7 +250,7 @@ class WordPressPostCreationTest extends TestCase
     {
         $manager = new FakeWordPressPostCreationManager([
             'success' => false,
-            'stdout' => 'HEXA_TOOLKIT_CREATE:' . json_encode([
+            'stdout' => 'HEXA_TOOLKIT_CREATE:'.json_encode([
                 'success' => true,
                 'message' => 'Post created and verified.',
                 'data' => [
@@ -260,7 +261,7 @@ class WordPressPostCreationTest extends TestCase
                         'phase' => 'final_readback',
                     ],
                 ],
-            ]) . "\nA shutdown hook returned an error.",
+            ])."\nA shutdown hook returned an error.",
             'message' => 'Direct wp-cli eval failed after the marked result was emitted.',
             'exit_code' => 1,
         ]);
@@ -276,11 +277,11 @@ class WordPressPostCreationTest extends TestCase
     {
         $manager = new FakeWordPressPostCreationManager([
             'success' => false,
-            'stdout' => 'HEXA_POST_LIST:' . json_encode([[
+            'stdout' => 'HEXA_POST_LIST:'.json_encode([[
                 'id' => 31328,
                 'slug' => 'aave-labs-expands-defi-lending',
                 'title' => ['rendered' => 'Aave Labs Expands DeFi Lending'],
-            ]]) . "\nA shutdown hook returned an error.",
+            ]])."\nA shutdown hook returned an error.",
             'message' => 'Native evaluation returned a non-zero exit code.',
         ]);
 
@@ -303,14 +304,14 @@ class WordPressPostCreationTest extends TestCase
     {
         $manager = new FakeWordPressPostCreationManager([
             'success' => false,
-            'stdout' => 'HEXA_POST_META_DETAILS:' . json_encode([
+            'stdout' => 'HEXA_POST_META_DETAILS:'.json_encode([
                 'success' => true,
                 'posts' => [31328 => [
                     'id' => 31328,
                     'post_id' => 31328,
                     'meta' => ['article_summary' => 'Verified summary'],
                 ]],
-            ]) . "\nA shutdown hook returned an error.",
+            ])."\nA shutdown hook returned an error.",
             'message' => 'Native evaluation returned a non-zero exit code.',
         ]);
 
@@ -329,9 +330,7 @@ final class FakeWordPressPostCreationManager extends WordPressManagerService
 {
     public string $evaluatedPhp = '';
 
-    public function __construct(private readonly array $evaluation)
-    {
-    }
+    public function __construct(private readonly array $evaluation) {}
 
     public function normalizeTarget(array $target): array
     {
