@@ -297,7 +297,6 @@ trait ManagesWordPressUserAccounts
             $php = <<<'PHP'
 $postIds = __POST_IDS__;
 $posts = [];
-$imageSizes = array_values(array_unique(array_merge(["full", "large", "medium", "medium_large", "thumbnail"], get_intermediate_image_sizes())));
 foreach ((array) $postIds as $rawPostId) {
     $postId = (int) $rawPostId;
     if ($postId <= 0) {
@@ -309,6 +308,11 @@ foreach ((array) $postIds as $rawPostId) {
     }
     $author = get_userdata((int) $post->post_author);
     $featuredId = (int) get_post_thumbnail_id($postId);
+    $attachmentMetadata = $featuredId > 0 ? get_post_meta($featuredId, "_wp_attachment_metadata", true) : [];
+    $availableImageSizes = is_array($attachmentMetadata) && is_array($attachmentMetadata["sizes"] ?? null)
+        ? array_keys($attachmentMetadata["sizes"])
+        : [];
+    $imageSizes = array_values(array_unique(array_merge(["full"], $availableImageSizes)));
     $meta = get_post_meta($postId);
     $flatMeta = [];
     foreach ((array) $meta as $key => $value) {
@@ -317,7 +321,11 @@ foreach ((array) $postIds as $rawPostId) {
     $sizes = [];
     if ($featuredId > 0) {
         foreach ($imageSizes as $size) {
-            $src = wp_get_attachment_image_src($featuredId, $size);
+            try {
+                $src = wp_get_attachment_image_src($featuredId, $size);
+            } catch (\Throwable $e) {
+                continue;
+            }
             if (is_array($src) && !empty($src[0])) {
                 $sizes[(string) $size] = [
                     "url" => (string) $src[0],

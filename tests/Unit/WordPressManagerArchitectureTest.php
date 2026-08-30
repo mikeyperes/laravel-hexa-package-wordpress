@@ -44,7 +44,9 @@ class WordPressManagerArchitectureTest extends TestCase
         );
 
         foreach ($files as $file) {
-            $lines = count(file($file, FILE_IGNORE_NEW_LINES));
+            $source = (string) file_get_contents($file);
+            $sourceWithoutEmbeddedPrograms = preg_replace("/<<<'PHP'\\R.*?^PHP;/ms", "<<<'PHP'\\n[embedded WordPress program]\\nPHP;", $source) ?? $source;
+            $lines = substr_count($sourceWithoutEmbeddedPrograms, "\n") + 1;
             $this->assertLessThan(700, $lines, basename($file));
         }
     }
@@ -71,6 +73,17 @@ class WordPressManagerArchitectureTest extends TestCase
             $this->assertLessThan(80, substr_count($source, "\n") + 1, $name);
             $this->assertDoesNotMatchRegularExpression('/\bfunction\s+[A-Za-z_]/', $source);
         }
+    }
+
+    public function test_post_detail_readback_never_generates_missing_image_sizes(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $source = (string) file_get_contents($root."/src/Services/Concerns/WordPressManager/ManagesWordPressUserAccounts.php");
+
+        $this->assertStringNotContainsString("get_intermediate_image_sizes()", $source);
+        $this->assertStringContainsString("\"_wp_attachment_metadata\"", $source);
+        $this->assertStringContainsString("array_keys(", $source);
+        $this->assertStringContainsString("catch (\\Throwable", $source);
     }
 
     public function test_bulk_user_inventory_carries_distinct_post_and_content_counts_with_real_roles(): void

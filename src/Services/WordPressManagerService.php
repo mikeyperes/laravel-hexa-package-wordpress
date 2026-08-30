@@ -11,6 +11,7 @@ use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressPo
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressTaxonomies;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressUserAccounts;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressUsersAndMeta;
+use hexa_package_wordpress\Services\Concerns\WordPressManager\VerifiesWordPressPostMutations;
 use hexa_package_wptoolkit\Services\WpToolkitService;
 use Illuminate\Support\Facades\Cache;
 
@@ -24,6 +25,7 @@ class WordPressManagerService
     use ManagesWordPressTaxonomies;
     use ManagesWordPressUserAccounts;
     use ManagesWordPressUsersAndMeta;
+    use VerifiesWordPressPostMutations;
 
     public function __construct(
         protected WpToolkitService $wptoolkit,

@@ -215,7 +215,17 @@ trait ManagesWordPressMedia
     private function normalizePostPayload(array $payload): array
     {
         $standardKeys = ["title", "content", "status", "excerpt", "date", "featured_media", "featured_media_id", "author", "categories", "category_ids", "tags", "tag_ids", "taxonomies", "post_type", "slug", "post_name"];
-        $taxonomies = (array) ($payload["taxonomies"] ?? []);
+        $taxonomies = [];
+        $providedTaxonomies = [];
+
+        foreach ((array) ($payload["taxonomies"] ?? []) as $taxonomy => $termIds) {
+            $taxonomy = trim((string) $taxonomy);
+            if ($taxonomy === "") {
+                continue;
+            }
+            $taxonomies[$taxonomy] = array_values(array_unique(array_filter(array_map("intval", (array) $termIds))));
+            $providedTaxonomies[] = $taxonomy;
+        }
 
         foreach ($payload as $key => $value) {
             if (in_array($key, $standardKeys, true)) {
@@ -223,8 +233,23 @@ trait ManagesWordPressMedia
             }
             if (is_array($value) && $value !== [] && $this->looksLikeIntegerList($value)) {
                 $taxonomies[(string) $key] = array_values(array_unique(array_filter(array_map("intval", $value))));
+                $providedTaxonomies[] = (string) $key;
             }
         }
+
+        $provided = [
+            "title" => array_key_exists("title", $payload),
+            "content" => array_key_exists("content", $payload),
+            "status" => array_key_exists("status", $payload),
+            "post_type" => array_key_exists("post_type", $payload),
+            "slug" => array_key_exists("slug", $payload) || array_key_exists("post_name", $payload),
+            "excerpt" => array_key_exists("excerpt", $payload),
+            "date" => array_key_exists("date", $payload),
+            "featured_media" => array_key_exists("featured_media", $payload) || array_key_exists("featured_media_id", $payload),
+            "author" => array_key_exists("author", $payload),
+            "categories" => array_key_exists("categories", $payload) || array_key_exists("category_ids", $payload),
+            "tags" => array_key_exists("tags", $payload) || array_key_exists("tag_ids", $payload),
+        ];
 
         return [
             "title" => array_key_exists("title", $payload) ? (string) ($payload["title"] ?? "") : null,
@@ -234,32 +259,37 @@ trait ManagesWordPressMedia
             "slug" => array_key_exists("slug", $payload) ? (string) ($payload["slug"] ?? "") : (array_key_exists("post_name", $payload) ? (string) ($payload["post_name"] ?? "") : null),
             "excerpt" => array_key_exists("excerpt", $payload) ? (string) ($payload["excerpt"] ?? "") : null,
             "date" => array_key_exists("date", $payload) ? ($payload["date"] !== null ? (string) $payload["date"] : null) : null,
-            "featured_media" => array_key_exists("featured_media", $payload) ? (int) $payload["featured_media"] : (array_key_exists("featured_media_id", $payload) ? (int) $payload["featured_media_id"] : null),
-            "author" => isset($payload["author"]) ? (string) $payload["author"] : null,
+            "featured_media" => array_key_exists("featured_media", $payload) && $payload["featured_media"] !== null
+                ? (int) $payload["featured_media"]
+                : (array_key_exists("featured_media_id", $payload) && $payload["featured_media_id"] !== null ? (int) $payload["featured_media_id"] : null),
+            "author" => array_key_exists("author", $payload) && $payload["author"] !== null ? (string) $payload["author"] : null,
             "categories" => array_values(array_unique(array_filter(array_map("intval", (array) ($payload["categories"] ?? $payload["category_ids"] ?? []))))),
             "tags" => array_values(array_unique(array_filter(array_map("intval", (array) ($payload["tags"] ?? $payload["tag_ids"] ?? []))))),
             "taxonomies" => $taxonomies,
+            "_provided" => $provided,
+            "_provided_taxonomies" => array_values(array_unique($providedTaxonomies)),
         ];
     }
 
     private function buildToolkitPostData(array $payload): array
     {
         $data = [];
+        $provided = (array) ($payload["_provided"] ?? []);
         foreach (["title", "content", "status", "excerpt", "date", "author"] as $field) {
-            if (array_key_exists($field, $payload) && $payload[$field] !== null && $payload[$field] !== "") {
+            if (($provided[$field] ?? false) && $payload[$field] !== null && ($field !== "date" || $payload[$field] !== "")) {
                 $data[$field] = $payload[$field];
             }
         }
-        if (!empty($payload["categories"])) {
+        if ($provided["categories"] ?? false) {
             $data["categories"] = $payload["categories"];
         }
-        if (!empty($payload["tags"])) {
+        if ($provided["tags"] ?? false) {
             $data["tags"] = $payload["tags"];
         }
-        if (isset($payload["slug"]) && $payload["slug"] !== null && $payload["slug"] !== "") {
+        if (($provided["slug"] ?? false) && $payload["slug"] !== null) {
             $data["slug"] = trim((string) preg_replace("/[^a-z0-9]+/i", "-", strtolower((string) $payload["slug"])), "-");
         }
-        if (array_key_exists("featured_media", $payload) && $payload["featured_media"] !== null) {
+        if (($provided["featured_media"] ?? false) && $payload["featured_media"] !== null) {
             $data["featured_media"] = (int) $payload["featured_media"];
         }
         return $data;
@@ -268,27 +298,29 @@ trait ManagesWordPressMedia
     private function buildRestPostPayload(array $payload): array
     {
         $data = [];
+        $provided = (array) ($payload["_provided"] ?? []);
         foreach (["title", "content", "status", "excerpt", "date"] as $field) {
-            if (array_key_exists($field, $payload) && $payload[$field] !== null && $payload[$field] !== "") {
+            if (($provided[$field] ?? false) && $payload[$field] !== null && ($field !== "date" || $payload[$field] !== "")) {
                 $data[$field] = $payload[$field];
             }
         }
-        if (isset($payload["slug"]) && $payload["slug"] !== null && $payload["slug"] !== "") {
+        if (($provided["slug"] ?? false) && $payload["slug"] !== null) {
             $data["slug"] = trim((string) preg_replace("/[^a-z0-9]+/i", "-", strtolower((string) $payload["slug"])), "-");
         }
-        if (array_key_exists("featured_media", $payload) && $payload["featured_media"] !== null) {
+        if (($provided["featured_media"] ?? false) && $payload["featured_media"] !== null) {
             $data["featured_media"] = (int) $payload["featured_media"];
         }
-        if (!empty($payload["author"]) && is_numeric($payload["author"])) {
+        if (($provided["author"] ?? false) && !empty($payload["author"]) && is_numeric($payload["author"])) {
             $data["author"] = (int) $payload["author"];
         }
-        if (!empty($payload["categories"])) {
+        if ($provided["categories"] ?? false) {
             $data["categories"] = $payload["categories"];
         }
-        if (!empty($payload["tags"])) {
+        if ($provided["tags"] ?? false) {
             $data["tags"] = $payload["tags"];
         }
-        foreach ((array) ($payload["taxonomies"] ?? []) as $taxonomy => $termIds) {
+        foreach ((array) ($payload["_provided_taxonomies"] ?? []) as $taxonomy) {
+            $termIds = (array) ($payload["taxonomies"][$taxonomy] ?? []);
             $data[$this->restTaxonomyField((string) $taxonomy)] = array_values(array_unique(array_filter(array_map("intval", (array) $termIds))));
         }
         return $data;
