@@ -24,19 +24,47 @@
         return `${name || `WordPress user #${id}`} · WP #${id}`;
     };
 
+    const cachedContentState = (host) => {
+        const rawCount = host && (host.content_count ?? host.delete_content_count);
+        const contentCount = Number.parseInt(rawCount, 10);
+        const contentCountKnown = Number.isFinite(contentCount)
+            && !!(host && (
+                host.content_count_known === true || host.delete_content_count_known === true
+            ));
+
+        return {
+            contentCount: contentCountKnown ? Math.max(0, contentCount) : null,
+            contentCountKnown,
+        };
+    };
+
     const ensureState = (host) => {
         if (!host || typeof host !== "object") return {};
+        const cached = cachedContentState(host);
         if (!host[STATE_KEY] || typeof host[STATE_KEY] !== "object") {
             host[STATE_KEY] = {
-                contextLoaded: host.delete_context_loaded === true,
-                contentCount: host.delete_content_count ?? host.delete_post_count ?? null,
-                contentCountKnown: host.delete_content_count_known === true,
-                requiresReassignment: host.delete_requires_reassignment ?? host.delete_requires_reassign ?? true,
+                contextLoaded: host.delete_context_loaded === true || cached.contentCountKnown,
+                contentCount: cached.contentCountKnown
+                    ? cached.contentCount
+                    : (host.content_count ?? host.delete_content_count ?? null),
+                contentCountKnown: cached.contentCountKnown || host.delete_content_count_known === true,
+                requiresReassignment: cached.contentCountKnown
+                    ? cached.contentCount > 0
+                    : (host.delete_requires_reassignment ?? host.delete_requires_reassign ?? true),
+                candidateContextLoaded: host.delete_candidate_context_loaded === true,
                 candidateGroups: Array.isArray(host.delete_candidate_groups) ? host.delete_candidate_groups : [],
                 destination: host.delete_reassign_item || null,
+                contentAction: host.delete_content_action === "delete" ? "delete" : "reassign",
             };
         }
-        return host[STATE_KEY];
+        const state = host[STATE_KEY];
+        if (state.contextLoaded !== true && cached.contentCountKnown) {
+            state.contextLoaded = true;
+            state.contentCount = cached.contentCount;
+            state.contentCountKnown = true;
+            state.requiresReassignment = cached.contentCount > 0;
+        }
+        return state;
     };
 
     const syncCompatibilityState = (host) => {
@@ -48,7 +76,9 @@
         host.delete_content_count_known = state.contentCountKnown === true;
         host.delete_requires_reassignment = state.requiresReassignment !== false;
         host.delete_requires_reassign = state.requiresReassignment !== false;
+        host.delete_candidate_context_loaded = state.candidateContextLoaded === true;
         host.delete_candidate_groups = Array.isArray(state.candidateGroups) ? state.candidateGroups : [];
+        host.delete_content_action = state.contentAction === "delete" ? "delete" : "reassign";
         host.delete_reassign_item = state.destination || null;
         host.delete_reassign_user_id = state.destination ? String(candidateId(state.destination) || "") : "";
         host.delete_reassign_user_label = state.destination ? destinationLabel(state.destination) : "";
@@ -118,7 +148,9 @@
             state.requiresReassignment = context && context.requires_reassignment !== undefined
                 ? context.requires_reassignment !== false
                 : !(context && context.requires_reassign === false);
+            state.candidateContextLoaded = true;
             state.candidateGroups = normalizeCandidateGroups(context || {});
+            if (state.requiresReassignment === false) state.contentAction = "reassign";
             syncCompatibilityState(host);
             host.delete_suggestions = context && context.suggestions && typeof context.suggestions === "object"
                 ? context.suggestions
@@ -135,12 +167,45 @@
             return !(state.contextLoaded === true && state.requiresReassignment === false);
         },
 
+        needsCandidateContext(host) {
+            const state = ensureState(host);
+            return state.requiresReassignment !== false && state.candidateContextLoaded !== true;
+        },
+
         contentCountLabel(host) {
             const state = ensureState(host);
             const count = Number.parseInt(state.contentCount, 10);
             if (!Number.isFinite(count)) return "Content count unknown";
             return `${count} content item${count === 1 ? "" : "s"}`;
         },
+
+        contentAction(host) {
+            return ensureState(host).contentAction === "delete" ? "delete" : "reassign";
+        },
+
+        deletesContent(host) {
+            const state = ensureState(host);
+            return state.requiresReassignment !== false && state.contentAction === "delete";
+        },
+
+        setContentAction(host, action, root = null) {
+            const state = ensureState(host);
+            state.contentAction = action === "delete" ? "delete" : "reassign";
+            if (state.contentAction === "delete") {
+                state.destination = null;
+                host.delete_error = false;
+                host.delete_message = "Ready. This user and all content they own will be permanently deleted.";
+            } else {
+                host.delete_error = false;
+                host.delete_message = state.destination
+                    ? `Ready. All existing content will be assigned to ${destinationLabel(state.destination)}.`
+                    : "Choose who receives all existing content.";
+            }
+            syncCompatibilityState(host);
+            dispatchChange(root, host, state.destination);
+            return state.contentAction;
+        },
+
 
         candidateGroups(host) {
             return normalizeCandidateGroups({ candidate_groups: ensureState(host).candidateGroups });
@@ -198,6 +263,7 @@
                 name: name || `WordPress user #${id}`,
             };
             const state = ensureState(host);
+            state.contentAction = "reassign";
             state.destination = destination;
             syncCompatibilityState(host);
             host.delete_error = false;
@@ -225,6 +291,7 @@
             const state = ensureState(host);
             if (state.contextLoaded !== true) return false;
             if (state.requiresReassignment === false) return true;
+            if (state.contentAction === "delete") return true;
             const id = candidateId(state.destination);
             return Number.isFinite(id) && id > 0 && !positiveIds(excludedUserIds).includes(id);
         },
@@ -260,7 +327,11 @@
                 wpUserDeletionApplyContext: (host, context) => api.applyContext(host, context),
                 wpUserDeletionState: (host) => api.state(host),
                 wpUserDeletionNeedsReassignment: (host) => api.needsReassignment(host),
+                wpUserDeletionNeedsCandidateContext: (host) => api.needsCandidateContext(host),
                 wpUserDeletionContentCountLabel: (host) => api.contentCountLabel(host),
+                wpUserDeletionContentAction: (host) => api.contentAction(host),
+                wpUserDeletionDeletesContent: (host) => api.deletesContent(host),
+                wpUserDeletionSetContentAction: (host, action, root) => api.setContentAction(host, action, root),
                 wpUserDeletionCandidateGroups: (host) => api.candidateGroups(host),
                 wpUserDeletionCandidateMeta: (candidate) => api.candidateMeta(candidate),
                 wpUserDeletionSelectedId: (host) => api.selectedId(host),

@@ -38,5 +38,58 @@ class PackageSmokeTest extends TestCase
         }
 
         $this->assertTrue($hasVersion, 'At least one package config file must expose a semantic version.');
+        $this->assertInstanceOf(
+            \hexa_package_wordpress\Media\WordPressMediaAssignmentService::class,
+            app(\hexa_package_wordpress\Media\WordPressMediaAssignmentService::class)
+        );
+        $this->assertInstanceOf(
+            \hexa_package_wordpress\Media\WordPressMediaOperationStore::class,
+            app(\hexa_package_wordpress\Media\WordPressMediaOperationStore::class)
+        );
+        $this->assertInstanceOf(
+            \hexa_package_wordpress\Services\WordPressPostSnapshotService::class,
+            app(\hexa_package_wordpress\Services\WordPressPostSnapshotService::class)
+        );
+        $this->assertInstanceOf(
+            \hexa_package_wordpress\Services\WordPressLoginUrlService::class,
+            app(\hexa_package_wordpress\Services\WordPressLoginUrlService::class)
+        );
+        $this->assertFileExists($root.'/resources/views/post-workspace/shell.blade.php');
+        $this->assertFileExists($root.'/resources/js/post-workspace.js');
+        $this->assertFileExists($root.'/resources/js/post-workspace.css');
+        $this->assertFileExists($root.'/docs/post-workspaces.md');
+
+        $workspace = (string) file_get_contents($root.'/resources/views/post-workspace/shell.blade.php');
+        $this->assertStringContainsString("route('hexa-package.asset'", $workspace);
+        $this->assertStringContainsString("'asset' => 'post-workspace.css'", $workspace);
+        $this->assertStringContainsString("'asset' => 'post-workspace.js'", $workspace);
+        $this->assertSame('2.0.63', (require $root.'/config/wordpress.php')['version']);
+        $this->assertSame('2.0.63', $composer['version'] ?? null);
+    }
+
+    public function test_workspace_login_preserves_the_native_first_form_submission(): void
+    {
+        $asset = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/post-workspace.js'
+        );
+        $start = strpos($asset, "root.querySelectorAll('[data-wordpress-login-form]')");
+        $end = strpos($asset, 'window.setInterval', $start);
+
+        $this->assertNotFalse($start);
+        $this->assertNotFalse($end);
+        $handler = substr($asset, $start, $end - $start);
+
+        $this->assertStringContainsString('let submitting = false', $handler);
+        $this->assertStringContainsString('if (submitting)', $handler);
+        $this->assertStringContainsString('event.preventDefault()', $handler);
+        $this->assertStringContainsString("window.open('about:blank', targetName)", $handler);
+        $this->assertStringContainsString('form.submit()', $handler);
+        $this->assertStringContainsString('popup.opener = null', $handler);
+        $this->assertStringContainsString("button.setAttribute('aria-busy', 'true')", $handler);
+        $this->assertStringNotContainsString('button.disabled', $handler);
+        $this->assertLessThan(
+            strpos($handler, "button.classList.add('is-loading')"),
+            strpos($handler, 'window.setTimeout')
+        );
     }
 }

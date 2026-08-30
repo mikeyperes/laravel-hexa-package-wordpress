@@ -20,7 +20,7 @@ class WordPressManagerArchitectureTest extends TestCase
             'testWriteAccess', 'inspectPlugin', 'syncPluginFromGitHub',
             'getAcfFieldInventory', 'getAcfValues', 'listAuthors',
             'resolvePreferredTaxonomy', 'listTerms', 'ensureTerms', 'createPost',
-            'updatePost', 'getPost', 'listPosts', 'listMedia', 'getUserProfile',
+            'updatePost', 'getPost', 'getPostSnapshot', 'listPosts', 'listMedia', 'getUserProfile',
             'setUserAvatar', 'updateNativeField', 'updateUserMeta', 'updateOption',
             'updateAcfField', 'normalizeAcfMediaIdList', 'updateAcfGallery',
             'getOption', 'getSiteIcon', 'purgeSiteCache', 'createLetterSiteIcon',
@@ -49,6 +49,19 @@ class WordPressManagerArchitectureTest extends TestCase
         }
     }
 
+    public function test_target_normalization_preserves_absolute_wordpress_paths(): void
+    {
+        $manager = app(WordPressManagerService::class);
+
+        $absolute = $manager->normalizeTarget([
+            'wp_path' => '/home/hexaprwire/public_html/',
+        ]);
+        $default = $manager->normalizeTarget([]);
+
+        $this->assertSame('/home/hexaprwire/public_html', $absolute['wp_path']);
+        $this->assertSame('public_html', $default['wp_path']);
+    }
+
     public function test_legacy_traits_are_composition_shims_not_duplicate_implementations(): void
     {
         $root = dirname(__DIR__, 2);
@@ -58,5 +71,25 @@ class WordPressManagerArchitectureTest extends TestCase
             $this->assertLessThan(80, substr_count($source, "\n") + 1, $name);
             $this->assertDoesNotMatchRegularExpression('/\bfunction\s+[A-Za-z_]/', $source);
         }
+    }
+
+    public function test_bulk_user_inventory_carries_distinct_post_and_content_counts_with_real_roles(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $inventory = (string) file_get_contents($root.'/src/Services/Concerns/WordPressManager/ManagesWordPressUserAccounts.php');
+        $normalizer = (string) file_get_contents($root.'/src/Services/Concerns/WordPressManager/HandlesWordPressRestAndToolkit.php');
+
+        $this->assertStringContainsString('$args=["fields"=>"all","number"=>9999]', $inventory);
+        $this->assertStringNotContainsString('"user_url","roles"],"number"=>9999', $inventory);
+        $this->assertStringContainsString('count_user_posts((int) $user->ID,"post",false)', $inventory);
+        $this->assertStringContainsString('GROUP BY post_author', $inventory);
+        $this->assertStringContainsString('"post_count"=>$postCount', $inventory);
+        $this->assertStringContainsString('"post_count_known"=>true', $inventory);
+        $this->assertStringContainsString('"content_count"=>$contentCount', $inventory);
+        $this->assertStringContainsString('"content_count_known"=>true', $inventory);
+        $this->assertStringContainsString('"post_count" => $postCount', $normalizer);
+        $this->assertStringContainsString('"post_count_known" => $postCountKnown', $normalizer);
+        $this->assertStringContainsString('"content_count" => $contentCount', $normalizer);
+        $this->assertStringContainsString('"content_count_known" => $contentCountKnown', $normalizer);
     }
 }

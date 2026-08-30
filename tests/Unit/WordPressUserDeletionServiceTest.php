@@ -98,6 +98,24 @@ class WordPressUserDeletionServiceTest extends TestCase
         $this->assertSame('Destination', $result['destination_user']['name']);
     }
 
+    public function test_delete_explicitly_deletes_owned_content_without_reassignment(): void
+    {
+        $manager = $this->restManagerForDelete();
+        $manager->expects($this->once())
+            ->method('deleteUser')
+            ->with(['mode' => 'rest'], 10, null)
+            ->willReturn(['success' => true, 'message' => 'User and content deleted via REST.']);
+
+        $result = (new WordPressUserDeletionService($manager))->delete([], 10, null, [
+            'delete_content' => true,
+        ]);
+
+        $this->assertTrue($result['success']);
+        $this->assertNull($result['reassigned_to_user_id']);
+        $this->assertTrue($result['deleted_content']);
+        $this->assertSame('delete', $result['content_action']);
+    }
+
     private function restManagerForDelete(?array $destinationResult = null): WordPressManagerService
     {
         $manager = $this->manager(['normalizeTarget', 'usesWpToolkit', 'listUsers', 'deleteUser']);
