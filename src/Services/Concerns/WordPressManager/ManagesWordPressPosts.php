@@ -264,16 +264,22 @@ PHP;
             $cliPostType = $postType === "posts" ? "post" : rtrim($postType, "s");
             $authorId = max(0, (int) ($query["author"] ?? 0));
             $perPage = max(1, min(100, (int) ($query["per_page"] ?? 100)));
+            $page = max(1, (int) ($query["page"] ?? 1));
+            $slug = trim((string) ($query["slug"] ?? ""));
+            $search = trim((string) ($query["search"] ?? ""));
             $parts = [
                 '$args=[',
                 '"post_type"=>' . var_export($cliPostType, true) . ',',
                 '"post_status"=>' . var_export((string) ($query["status"] ?? "any"), true) . ',',
                 '"posts_per_page"=>' . $perPage . ',',
+                '"paged"=>' . $page . ',',
                 '"orderby"=>' . var_export((string) ($query["orderby"] ?? "date"), true) . ',',
                 '"order"=>' . var_export(strtoupper((string) ($query["order"] ?? "DESC")), true) . ',',
                 '"fields"=>"ids",',
                 '];',
                 'if (' . $authorId . '>0) { $args["author"]=' . $authorId . '; }',
+                'if (' . var_export($slug !== '', true) . ') { $args["name"]=' . var_export($slug, true) . '; }',
+                'if (' . var_export($search !== '', true) . ') { $args["s"]=' . var_export($search, true) . '; }',
                 '$dateQuery=[];',
                 'if (' . var_export(!empty($query["after"]), true) . ') { $dateQuery[]=["after"=>' . var_export((string) ($query["after"] ?? ""), true) . ']; }',
                 'if (' . var_export(!empty($query["before"]), true) . ') { $dateQuery[]=["before"=>' . var_export((string) ($query["before"] ?? ""), true) . ']; }',
@@ -297,12 +303,12 @@ PHP;
             $php = implode("", $parts);
 
             $eval = $this->evaluatePhp($target, $php);
-            if (!($eval["success"] ?? false)) {
-                return ["success" => false, "message" => (string) ($eval["message"] ?? "WP Toolkit list posts failed."), "data" => []];
-            }
-
             $payload = $this->decodeMarkedPayload((string) ($eval["stdout"] ?? ""), "HEXA_POST_LIST:");
             if (!is_array($payload)) {
+                if (!($eval["success"] ?? false)) {
+                    return ["success" => false, "message" => (string) ($eval["message"] ?? "WP Toolkit list posts failed."), "data" => []];
+                }
+
                 return ["success" => false, "message" => "Failed to parse WP Toolkit post list output.", "data" => []];
             }
 

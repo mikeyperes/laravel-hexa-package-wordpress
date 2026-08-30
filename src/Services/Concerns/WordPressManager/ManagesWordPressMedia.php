@@ -171,12 +171,21 @@ trait ManagesWordPressMedia
         }
 
         if (method_exists($this->wptoolkit, "wpCliEvalWithPlugins")) {
-            $pluginResult = $this->wptoolkit->wpCliEvalWithPlugins($target["server"], (int) $target["install_id"], $php, 120);
-            if ($pluginResult["success"] ?? false) {
-                return $pluginResult;
-            }
+            // A failed native evaluation may already have committed mutations before
+            // WordPress shutdown hooks return a non-zero exit code. Replaying the same
+            // PHP through WP Toolkit can duplicate writes and also runs without the
+            // target site's complete plugin/taxonomy registry. Return the first result
+            // to the caller so marked output can be interpreted exactly once.
+            return $this->wptoolkit->wpCliEvalWithPlugins(
+                $target["server"],
+                (int) $target["install_id"],
+                $php,
+                120,
+            );
         }
 
+        // Compatibility for older toolkit packages that do not expose the native
+        // plugin-loaded evaluator. This remains a single execution path.
         return $this->wptoolkit->wpCliEval($target["server"], (int) $target["install_id"], $php);
     }
     private function ensureToolkitTerms(array $target, array $names, string $taxonomy): array
@@ -202,11 +211,11 @@ trait ManagesWordPressMedia
         $php = implode("", $parts);
 
         $result = $this->evaluatePhp($target, $php);
-        if (!($result["success"] ?? false)) {
+        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_BATCH_TERMS:");
+        if (!is_array($payload) && !($result["success"] ?? false)) {
             return ["success" => false, "message" => (string) ($result["message"] ?? "Failed to resolve taxonomy terms."), "term_ids" => [], "term_details" => []];
         }
 
-        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_BATCH_TERMS:");
         return is_array($payload)
             ? $payload
             : ["success" => false, "message" => "Failed to parse taxonomy batch output.", "term_ids" => [], "term_details" => []];
