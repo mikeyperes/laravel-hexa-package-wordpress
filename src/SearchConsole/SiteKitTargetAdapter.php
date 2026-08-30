@@ -2,15 +2,13 @@
 
 namespace hexa_package_wordpress\SearchConsole;
 
-use hexa_package_google_search_console\Contracts\TargetAdapter;
-use hexa_package_google_search_console\Models\GoogleSearchConsoleProperty;
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Services\WpToolkitService;
 use Illuminate\Support\Facades\Cache;
 use InvalidArgumentException;
 use RuntimeException;
 
-class SiteKitTargetAdapter implements TargetAdapter
+class SiteKitTargetAdapter implements \hexa_package_google_search_console\Contracts\TargetAdapter
 {
     private const PLUGIN_SLUG = 'google-site-kit';
 
@@ -77,7 +75,7 @@ class SiteKitTargetAdapter implements TargetAdapter
         });
     }
 
-    public function attach(GoogleSearchConsoleProperty $property, string $targetKey): array
+    public function attach(\hexa_package_google_search_console\Models\GoogleSearchConsoleProperty $property, string $targetKey): array
     {
         [$server, $installId] = $this->resolveTarget($targetKey);
         $info = $this->installInfo($server, $installId);
