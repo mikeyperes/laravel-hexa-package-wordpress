@@ -3,6 +3,9 @@
 namespace Tests\Unit;
 
 use GuzzleHttp\Psr7\Uri;
+use hexa_core\Security\Http\OutboundHttpRequest;
+use hexa_core\Security\Http\OutboundHttpResponse;
+use hexa_core\Security\Http\SafeOutboundHttpClient;
 use hexa_core\Security\Http\OutboundUrlGuard;
 use hexa_core\Security\Http\UnsafeOutboundUrl;
 use hexa_package_wordpress\Acf\AcfEducationMetadataService;
@@ -46,42 +49,35 @@ final class OutboundHttpSecurityTest extends TestCase
 
     public function test_article_metadata_verifies_tls_and_validates_redirect_destinations(): void
     {
-        $options = null;
-        Http::fake(function (ClientRequest $request, array $requestOptions) use (&$options) {
-            $options = $requestOptions;
+        $requests = [];
+        $this->bindSafeClient(function (OutboundHttpRequest $request) use (&$requests): OutboundHttpResponse {
+            $requests[] = $request;
 
-            return Factory::response('<html><meta property="og:title" content="Guarded article"></html>');
+            return new OutboundHttpResponse(200, [], '<meta property="og:title" content="Guarded article">');
         });
-
         $response = (new WordPressController)->articleMetadata(Request::create('/', 'POST', [
             'url' => 'https://public.example.org/article',
         ]));
 
-        $this->assertTrue($response->getData(true)['items'][0]['success']);
-        $this->assertSecureOptions($options);
-        $this->assertRedirectToPrivateTargetIsRejected($options);
+        $this->assertSame('Guarded article', $response->getData(true)['items'][0]['title']);
+        $this->assertPinnedRequest($requests[0], 1048576);
     }
 
     public function test_acf_education_lookup_uses_verified_guarded_wikipedia_requests(): void
     {
-        $options = null;
-        Http::fake(function (ClientRequest $request, array $requestOptions) use (&$options) {
-            $options = $requestOptions;
+        $requests = [];
+        $this->bindSafeClient(function (OutboundHttpRequest $request) use (&$requests): OutboundHttpResponse {
+            $requests[] = $request;
 
-            return Factory::response([
-                'query' => [
-                    'pages' => [[
-                        'pageid' => 123,
-                        'title' => 'Example University',
-                    ]],
-                ],
-            ]);
+            return new OutboundHttpResponse(200, [], json_encode([
+                'query' => ['pages' => [['pageid' => 123, 'title' => 'Example University']]],
+            ], JSON_THROW_ON_ERROR));
         });
 
         $result = app(AcfEducationMetadataService::class)->lookupMany(['Example University']);
 
         $this->assertTrue($result['items'][0]['success']);
-        $this->assertSecureOptions($options);
+        $this->assertPinnedRequest($requests[0], 262144);
     }
 
     public function test_remote_media_download_and_upload_are_both_verified_and_guarded(): void
@@ -130,18 +126,35 @@ final class OutboundHttpSecurityTest extends TestCase
 
     public function test_favicon_fallback_uses_verified_guarded_requests(): void
     {
-        $options = null;
-        Http::fake(function (ClientRequest $request, array $requestOptions) use (&$options) {
-            $options = $requestOptions;
+        $requests = [];
+        $this->bindSafeClient(function (OutboundHttpRequest $request) use (&$requests): OutboundHttpResponse {
+            $requests[] = $request;
 
-            return Factory::response('<html><link rel="icon" href="/icon.png"></html>');
+            return new OutboundHttpResponse(200, [], '<link rel="icon" href="/icon.png">');
         });
-
         $method = new ReflectionMethod(WordPressManagerService::class, 'discoverSiteIconFallback');
         $result = $method->invoke(app(WordPressManagerService::class), 'https://wordpress.example.org');
 
         $this->assertSame('https://wordpress.example.org/icon.png', $result['url']);
-        $this->assertSecureOptions($options);
+        $this->assertPinnedRequest($requests[0], 1048576);
+    }
+
+    private function assertPinnedRequest(OutboundHttpRequest $request, int $maxBytes): void
+    {
+        $this->assertSame($maxBytes, $request->maxResponseBytes);
+        $this->assertSame(['93.184.216.34'], $request->target->addresses);
+        $options = $request->curlOptions();
+        $this->assertTrue($options[CURLOPT_SSL_VERIFYPEER]);
+        $this->assertSame(2, $options[CURLOPT_SSL_VERIFYHOST]);
+        $this->assertFalse($options[CURLOPT_FOLLOWLOCATION]);
+        $this->assertSame($request->target->curlResolveEntries(), $options[CURLOPT_RESOLVE]);
+    }
+
+    private function bindSafeClient(\Closure $transport): void
+    {
+        $this->app->instance(SafeOutboundHttpClient::class, new SafeOutboundHttpClient(
+            $this->app->make(OutboundUrlGuard::class), $transport,
+        ));
     }
 
     private function assertSecureOptions(?array $options): void

@@ -2,13 +2,20 @@
 
 namespace hexa_package_wordpress\Acf;
 
-use hexa_core\Security\Http\OutboundUrlGuard;
-use Illuminate\Support\Facades\Http;
+use hexa_core\Security\Http\OutboundHttpResponse;
+use hexa_core\Security\Http\SafeOutboundHttpClient;
+use Illuminate\Support\Facades\Validator;
 
 class AcfEducationMetadataService
 {
+    public function __construct(private readonly SafeOutboundHttpClient $http) {}
+
     public function lookupMany(array $names): array
     {
+        Validator::make(['names' => $names], [
+            'names' => ['array', 'max:20'],
+            'names.*' => ['nullable', 'string', 'max:190'],
+        ])->validate();
         $names = collect($names)
             ->map(static fn ($name) => trim((string) $name))
             ->filter(static fn ($name) => $name !== '')
@@ -38,18 +45,9 @@ class AcfEducationMetadataService
         try {
             $variants = $this->nameVariants($name);
             $candidateTitles = [];
-            $guard = app(OutboundUrlGuard::class);
-            $wikipediaApiUrl = $guard->assertSafe('https://en.wikipedia.org/w/api.php');
-            $requestOptions = [
-                'verify' => true,
-                'allow_redirects' => $guard->redirectOptions(),
-            ];
 
             foreach ($variants as $variant) {
-                $direct = Http::withOptions($requestOptions)
-                    ->timeout(12)
-                    ->withHeaders(['User-Agent' => 'Hexa WordPress ACF Education Metadata Fetcher/1.0'])
-                    ->get($wikipediaApiUrl, [
+                $direct = $this->queryWikipedia([
                         'action' => 'query',
                         'titles' => $variant,
                         'redirects' => 1,
@@ -61,7 +59,11 @@ class AcfEducationMetadataService
                     continue;
                 }
 
-                $redirects = $direct->json('query.redirects', []);
+                $data = $direct->json();
+                if (! is_array($data) || ! is_array($data['query'] ?? null)) {
+                    throw new \UnexpectedValueException('Invalid Wikipedia response.');
+                }
+                $redirects = $data['query']['redirects'] ?? [];
                 $redirects = is_array($redirects) ? $redirects : [];
                 $acceptedRedirectTargets = [];
                 foreach ($redirects as $redirect) {
@@ -72,7 +74,7 @@ class AcfEducationMetadataService
                     }
                 }
 
-                $pages = $direct->json('query.pages', []);
+                $pages = $data['query']['pages'] ?? [];
                 if (! is_array($pages)) {
                     continue;
                 }
@@ -97,10 +99,7 @@ class AcfEducationMetadataService
             }
 
             foreach ($variants as $variant) {
-                $response = Http::withOptions($requestOptions)
-                    ->timeout(12)
-                    ->withHeaders(['User-Agent' => 'Hexa WordPress ACF Education Metadata Fetcher/1.0'])
-                    ->get($wikipediaApiUrl, [
+                $response = $this->queryWikipedia([
                         'action' => 'query',
                         'list' => 'search',
                         'srsearch' => '"'.$variant.'"',
@@ -110,10 +109,14 @@ class AcfEducationMetadataService
                     ]);
 
                 if (! $response->successful()) {
-                    return ['name' => $name, 'success' => false, 'wiki_url' => '', 'title' => '', 'message' => 'Wikipedia search failed: HTTP '.$response->status(), 'searched' => $variants];
+                    return ['name' => $name, 'success' => false, 'wiki_url' => '', 'title' => '', 'message' => 'Wikipedia search failed: HTTP '.$response->status, 'searched' => $variants];
                 }
 
-                $search = $response->json('query.search', []);
+                $data = $response->json();
+                if (! is_array($data) || ! is_array($data['query']['search'] ?? null)) {
+                    throw new \UnexpectedValueException('Invalid Wikipedia response.');
+                }
+                $search = $data['query']['search'];
                 $search = is_array($search) ? $search : [];
                 foreach ($search as $candidate) {
                     $title = trim((string) ($candidate['title'] ?? ''));
@@ -144,9 +147,19 @@ class AcfEducationMetadataService
                 'searched' => $variants,
                 'candidates' => array_slice(array_keys($candidateTitles), 0, 12),
             ];
-        } catch (\Throwable $e) {
-            return ['name' => $name, 'success' => false, 'wiki_url' => '', 'title' => '', 'message' => 'Wikipedia search failed: '.$e->getMessage()];
+        } catch (\Throwable) {
+            return ['name' => $name, 'success' => false, 'wiki_url' => '', 'title' => '', 'message' => 'Wikipedia metadata could not be fetched safely.'];
         }
+    }
+
+    private function queryWikipedia(array $query): OutboundHttpResponse
+    {
+        return $this->http->request('GET', 'https://en.wikipedia.org/w/api.php?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986), [
+            'timeout' => 12,
+            'max_bytes' => 262144,
+            'max_redirects' => 0,
+            'headers' => ['User-Agent' => 'Hexa WordPress ACF Education Metadata Fetcher/1.0', 'Accept' => 'application/json'],
+        ]);
     }
 
     protected function titleMatches(string $name, string $title): bool

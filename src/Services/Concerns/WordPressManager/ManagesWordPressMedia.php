@@ -3,7 +3,7 @@
 namespace hexa_package_wordpress\Services\Concerns\WordPressManager;
 
 use hexa_core\Security\Http\OutboundUrlGuard;
-use Illuminate\Support\Facades\Http;
+use hexa_core\Security\Http\SafeOutboundHttpClient;
 use Illuminate\Support\Facades\Log;
 
 trait ManagesWordPressMedia
@@ -303,49 +303,56 @@ trait ManagesWordPressMedia
         try {
             $guard = app(OutboundUrlGuard::class);
             $siteUrl = $guard->assertSafe($siteUrl);
-            $requestOptions = [
-                'verify' => true,
-                'allow_redirects' => $guard->redirectOptions(),
-            ];
-        } catch (\Throwable $e) {
-            Log::debug('WordPressManagerService::discoverSiteIconFallback rejected unsafe URL', ['url' => $siteUrl, 'error' => $e->getMessage()]);
+            $http = app(SafeOutboundHttpClient::class);
+        } catch (\Throwable) {
+            Log::debug('WordPressManagerService::discoverSiteIconFallback rejected unsafe URL');
 
             return ['url' => '', 'source' => 'none'];
         }
 
         try {
-            $response = Http::withOptions($requestOptions)
-                ->timeout(15)
-                ->withHeaders(['User-Agent' => 'Hexa WordPress Manager'])
-                ->get($siteUrl.'/');
+            $response = $http->request('GET', $siteUrl.'/', [
+                'timeout' => 15, 'max_bytes' => 1048576, 'max_redirects' => 5,
+                'headers' => ['User-Agent' => 'Hexa WordPress Manager'],
+            ]);
             if ($response->successful()) {
-                $html = (string) $response->body();
+                $html = $response->body;
                 if (preg_match_all('/<link\s+[^>]*>/i', $html, $matches)) {
                     foreach ($matches[0] as $tag) {
                         $rel = strtolower($this->htmlAttribute((string) $tag, 'rel'));
                         $href = $this->htmlAttribute((string) $tag, 'href');
                         if ($href !== '' && (str_contains($rel, 'icon') || str_contains($rel, 'apple-touch-icon'))) {
-                            return ['url' => $this->absoluteUrl($href, $siteUrl), 'source' => 'html_icon_link'];
+                            $iconUrl = (string) \GuzzleHttp\Psr7\UriResolver::resolve(
+                                new \GuzzleHttp\Psr7\Uri($response->effectiveUrl ?? $siteUrl.'/'),
+                                new \GuzzleHttp\Psr7\Uri($href),
+                            );
+                            try {
+                                $iconUrl = $guard->assertSafe($iconUrl);
+                            } catch (\Throwable) {
+                                continue;
+                            }
+
+                            return ['url' => $iconUrl, 'source' => 'html_icon_link'];
                         }
                     }
                 }
             }
-        } catch (\Throwable $e) {
-            Log::debug('WordPressManagerService::discoverSiteIconFallback html lookup failed', ['url' => $siteUrl, 'error' => $e->getMessage()]);
+        } catch (\Throwable) {
+            Log::debug('WordPressManagerService::discoverSiteIconFallback html lookup failed');
         }
 
         $rootIcon = $siteUrl.'/favicon.ico';
         try {
-            $response = Http::withOptions($requestOptions)
-                ->timeout(10)
-                ->withHeaders(['User-Agent' => 'Hexa WordPress Manager', 'Range' => 'bytes=0-256'])
-                ->get($rootIcon);
-            $contentType = strtolower((string) $response->header('content-type'));
-            if ($response->successful() && (str_contains($contentType, 'image') || strlen((string) $response->body()) > 0)) {
+            $response = $http->request('GET', $rootIcon, [
+                'timeout' => 10, 'max_bytes' => 262144, 'max_redirects' => 5,
+                'headers' => ['User-Agent' => 'Hexa WordPress Manager', 'Range' => 'bytes=0-256'],
+            ]);
+            $contentType = strtolower($response->headerValues('content-type')[0] ?? '');
+            if ($response->successful() && str_starts_with($contentType, 'image/') && $response->body !== '') {
                 return ['url' => $rootIcon, 'source' => 'root_favicon_ico'];
             }
-        } catch (\Throwable $e) {
-            Log::debug('WordPressManagerService::discoverSiteIconFallback root lookup failed', ['url' => $rootIcon, 'error' => $e->getMessage()]);
+        } catch (\Throwable) {
+            Log::debug('WordPressManagerService::discoverSiteIconFallback root lookup failed');
         }
 
         return ['url' => '', 'source' => 'none'];
