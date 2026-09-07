@@ -2,8 +2,8 @@
 
 namespace hexa_package_wordpress\Services\Concerns\WordPressManager;
 
-use hexa_core\Security\Http\OutboundUrlGuard;
-use Illuminate\Support\Facades\Http;
+use GuzzleHttp\Psr7\Uri;
+use GuzzleHttp\Psr7\UriResolver;
 use Illuminate\Support\Facades\Log;
 
 trait ManagesWordPressMedia
@@ -11,15 +11,6 @@ trait ManagesWordPressMedia
     public function uploadMedia(array $target, string $filePath, string $fileName = '', string $altText = '', string $caption = '', string $description = ''): array
     {
         $target = $this->normalizeTarget($target);
-        $filePath = trim($filePath);
-        if (filter_var($filePath, FILTER_VALIDATE_URL)) {
-            try {
-                $filePath = app(OutboundUrlGuard::class)->assertSafe($filePath);
-            } catch (\Throwable $e) {
-                return ['success' => false, 'message' => 'Remote media URL is not allowed: '.$e->getMessage()];
-            }
-        }
-
         if ($this->usesWpToolkit($target)) {
             $normalizedPath = trim($filePath);
             if ($normalizedPath !== '' && ! filter_var($normalizedPath, FILTER_VALIDATE_URL) && is_file($normalizedPath)) {
@@ -301,51 +292,55 @@ trait ManagesWordPressMedia
         }
 
         try {
-            $guard = app(OutboundUrlGuard::class);
-            $siteUrl = $guard->assertSafe($siteUrl);
-            $requestOptions = [
-                'verify' => true,
-                'allow_redirects' => $guard->redirectOptions(),
-            ];
-        } catch (\Throwable $e) {
-            Log::debug('WordPressManagerService::discoverSiteIconFallback rejected unsafe URL', ['url' => $siteUrl, 'error' => $e->getMessage()]);
-
-            return ['url' => '', 'source' => 'none'];
-        }
-
-        try {
-            $response = Http::withOptions($requestOptions)
-                ->timeout(15)
-                ->withHeaders(['User-Agent' => 'Hexa WordPress Manager'])
-                ->get($siteUrl.'/');
+            $response = $this->rest->publicGet(
+                $siteUrl.'/',
+                headers: ['User-Agent' => 'Hexa WordPress Manager/2.0', 'Accept' => 'text/html,application/xhtml+xml'],
+                timeoutSeconds: 15,
+                maxResponseBytes: 512 * 1024,
+                maxRedirects: 4,
+            );
             if ($response->successful()) {
-                $html = (string) $response->body();
+                $html = $response->body;
                 if (preg_match_all('/<link\s+[^>]*>/i', $html, $matches)) {
                     foreach ($matches[0] as $tag) {
                         $rel = strtolower($this->htmlAttribute((string) $tag, 'rel'));
                         $href = $this->htmlAttribute((string) $tag, 'href');
                         if ($href !== '' && (str_contains($rel, 'icon') || str_contains($rel, 'apple-touch-icon'))) {
-                            return ['url' => $this->absoluteUrl($href, $siteUrl), 'source' => 'html_icon_link'];
+                            $iconUrl = $this->rest->validatedPublicUrl($this->absoluteUrl($href, $siteUrl.'/'));
+                            if ($iconUrl !== null) {
+                                return ['url' => $iconUrl, 'source' => 'html_icon_link'];
+                            }
                         }
                     }
                 }
             }
         } catch (\Throwable $e) {
-            Log::debug('WordPressManagerService::discoverSiteIconFallback html lookup failed', ['url' => $siteUrl, 'error' => $e->getMessage()]);
+            Log::debug('WordPress site icon HTML lookup failed', [
+                'host' => strtolower((string) parse_url($siteUrl, PHP_URL_HOST)),
+                'failure' => $e::class,
+            ]);
         }
 
         $rootIcon = $siteUrl.'/favicon.ico';
         try {
-            $response = Http::withOptions($requestOptions)
-                ->timeout(10)
-                ->withHeaders(['User-Agent' => 'Hexa WordPress Manager', 'Range' => 'bytes=0-256'])
-                ->get($rootIcon);
-            $contentType = strtolower((string) $response->header('content-type'));
-            if ($response->successful() && (str_contains($contentType, 'image') || strlen((string) $response->body()) > 0)) {
-                return ['url' => $rootIcon, 'source' => 'root_favicon_ico'];
+            $response = $this->rest->publicGet(
+                $rootIcon,
+                headers: ['User-Agent' => 'Hexa WordPress Manager/2.0', 'Accept' => 'image/*'],
+                timeoutSeconds: 10,
+                maxResponseBytes: 64 * 1024,
+                maxRedirects: 2,
+            );
+            if ($response->successful() && $this->isSupportedSiteIcon($response->body, $response->headerValues('content-type'))) {
+                $validated = $this->rest->validatedPublicUrl($response->effectiveUrl ?: $rootIcon);
+                if ($validated !== null) {
+                    return ['url' => $validated, 'source' => 'root_favicon_ico'];
+                }
             }
         } catch (\Throwable $e) {
-            Log::debug('WordPressManagerService::discoverSiteIconFallback root lookup failed', ['url' => $rootIcon, 'error' => $e->getMessage()]);
+            Log::debug('WordPress root favicon lookup failed', [
+                'host' => strtolower((string) parse_url($rootIcon, PHP_URL_HOST)),
+                'failure' => $e::class,
+            ]);
         }
 
         return ['url' => '', 'source' => 'none'];
@@ -367,14 +362,36 @@ trait ManagesWordPressMedia
         if ($url === '') {
             return '';
         }
-        if (str_starts_with($url, '//')) {
-            return 'https:'.$url;
+
+        try {
+            return (string) UriResolver::resolve(new Uri($base), new Uri($url));
+        } catch (\Throwable) {
+            return '';
         }
-        if (preg_match('/^https?:\/\//i', $url)) {
-            return $url;
+    }
+
+    /** @param list<string> $declaredTypes */
+    private function isSupportedSiteIcon(string $body, array $declaredTypes): bool
+    {
+        if ($body === '' || strlen($body) > 64 * 1024) {
+            return false;
         }
 
-        return rtrim($base, '/').'/'.ltrim($url, '/');
+        $declaredType = strtolower(trim(explode(';', $declaredTypes[0] ?? '')[0]));
+        $image = @getimagesizefromstring($body);
+        $detectedType = strtolower((string) ($image['mime'] ?? ''));
+        $allowed = [
+            'image/avif',
+            'image/gif',
+            'image/jpeg',
+            'image/png',
+            'image/vnd.microsoft.icon',
+            'image/webp',
+            'image/x-icon',
+        ];
+
+        return in_array($detectedType, $allowed, true)
+            || (str_starts_with($body, "\x00\x00\x01\x00") && in_array($declaredType, $allowed, true));
     }
 
     private function hexToRgb(string $hex, array $fallback): array

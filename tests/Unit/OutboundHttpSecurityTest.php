@@ -2,106 +2,152 @@
 
 namespace Tests\Unit;
 
-use GuzzleHttp\Psr7\Uri;
+use Closure;
+use hexa_core\Security\Http\OutboundHttpRequest;
+use hexa_core\Security\Http\OutboundHttpResponse;
 use hexa_core\Security\Http\OutboundUrlGuard;
-use hexa_core\Security\Http\UnsafeOutboundUrl;
+use hexa_core\Security\Http\SafeOutboundHttpClient;
+use hexa_package_media\Inspection\ImageInspector;
+use hexa_package_media\Transfer\TemporaryMediaResourceManager;
 use hexa_package_wordpress\Acf\AcfEducationMetadataService;
 use hexa_package_wordpress\Http\Controllers\WordPressController;
+use hexa_package_wordpress\Services\WordPressHttpTransport;
 use hexa_package_wordpress\Services\WordPressManagerService;
+use hexa_package_wordpress\Services\WordPressMediaSourceService;
 use hexa_package_wordpress\Services\WordPressService;
-use Illuminate\Http\Client\Factory;
-use Illuminate\Http\Client\Request as ClientRequest;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
+use hexa_package_wptoolkit\Services\WpToolkitService;
+use Illuminate\Container\Container;
+use Illuminate\Foundation\Application;
+use Illuminate\Support\Facades\Facade;
+use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 use ReflectionMethod;
-use Tests\TestCase;
 
 final class OutboundHttpSecurityTest extends TestCase
 {
+    private const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->app->instance(OutboundUrlGuard::class, new OutboundUrlGuard(
-            static fn (string $host): array => match ($host) {
-                'public.example.org', 'wordpress.example.org', 'images.example.org', 'en.wikipedia.org' => ['93.184.216.34'],
-                default => [],
-            },
-        ));
-        Http::preventStrayRequests();
+        $container = new Application(dirname(__DIR__, 5));
+        $container->instance('log', new NullLogger);
+        Container::setInstance($container);
+        Facade::setFacadeApplication($container);
     }
 
-    public function test_article_metadata_blocks_a_private_target_before_any_request(): void
+    protected function tearDown(): void
     {
-        Http::fake();
+        Facade::clearResolvedInstances();
+        Facade::setFacadeApplication(null);
+        Container::setInstance(null);
 
-        $response = (new WordPressController)->articleMetadata(Request::create('/', 'POST', [
-            'url' => 'http://127.0.0.1/private',
-        ]));
-        $payload = $response->getData(true);
-
-        $this->assertFalse($payload['items'][0]['success']);
-        Http::assertNothingSent();
+        parent::tearDown();
     }
 
-    public function test_article_metadata_verifies_tls_and_validates_redirect_destinations(): void
+    public function test_article_metadata_blocks_private_targets_before_transport(): void
     {
-        $options = null;
-        Http::fake(function (ClientRequest $request, array $requestOptions) use (&$options) {
-            $options = $requestOptions;
+        $calls = 0;
+        $service = $this->service($this->transport(function () use (&$calls): OutboundHttpResponse {
+            $calls++;
 
-            return Factory::response('<html><meta property="og:title" content="Guarded article"></html>');
-        });
+            return new OutboundHttpResponse(200, [], '<html><title>Unexpected</title></html>');
+        }));
 
-        $response = (new WordPressController)->articleMetadata(Request::create('/', 'POST', [
-            'url' => 'https://public.example.org/article',
-        ]));
+        $result = (new AuditableWordPressController($service))->fetchMetadata('http://127.0.0.1/private');
 
-        $this->assertTrue($response->getData(true)['items'][0]['success']);
-        $this->assertSecureOptions($options);
-        $this->assertRedirectToPrivateTargetIsRejected($options);
+        $this->assertFalse($result['success']);
+        $this->assertSame('Fetch failed securely.', $result['message']);
+        $this->assertSame(0, $calls);
     }
 
-    public function test_acf_education_lookup_uses_verified_guarded_wikipedia_requests(): void
+    public function test_article_metadata_uses_pinned_tls_and_revalidates_redirects(): void
     {
-        $options = null;
-        Http::fake(function (ClientRequest $request, array $requestOptions) use (&$options) {
-            $options = $requestOptions;
+        $requests = [];
+        $service = $this->service($this->transport(function (OutboundHttpRequest $request) use (&$requests): OutboundHttpResponse {
+            $requests[] = $request;
 
-            return Factory::response([
+            return new OutboundHttpResponse(200, ['Content-Type' => 'text/html'], '<meta property="og:title" content="Guarded article">');
+        }));
+
+        $result = (new AuditableWordPressController($service))->fetchMetadata('https://public.example.org/article');
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('Guarded article', $result['title']);
+        $this->assertCount(1, $requests);
+        $this->assertPinnedRequest($requests[0]);
+
+        $redirectRequests = [];
+        $redirected = $this->service($this->transport(function (OutboundHttpRequest $request) use (&$redirectRequests): OutboundHttpResponse {
+            $redirectRequests[] = $request;
+
+            return new OutboundHttpResponse(302, ['Location' => 'http://127.0.0.1/private'], '');
+        }));
+
+        $rejected = (new AuditableWordPressController($redirected))->fetchMetadata('https://public.example.org/article');
+
+        $this->assertFalse($rejected['success']);
+        $this->assertSame('Fetch failed securely.', $rejected['message']);
+        $this->assertCount(1, $redirectRequests);
+    }
+
+    public function test_acf_education_lookup_uses_one_verified_bounded_wikipedia_request(): void
+    {
+        $requests = [];
+        $service = $this->service($this->transport(function (OutboundHttpRequest $request) use (&$requests): OutboundHttpResponse {
+            $requests[] = $request;
+
+            return new OutboundHttpResponse(200, ['Content-Type' => 'application/json'], json_encode([
                 'query' => [
                     'pages' => [[
                         'pageid' => 123,
                         'title' => 'Example University',
                     ]],
                 ],
-            ]);
-        });
+            ], JSON_THROW_ON_ERROR));
+        }));
 
-        $result = app(AcfEducationMetadataService::class)->lookupMany(['Example University']);
+        $result = (new AcfEducationMetadataService($service))->lookupMany(['Example University']);
 
         $this->assertTrue($result['items'][0]['success']);
-        $this->assertSecureOptions($options);
+        $this->assertCount(1, $requests);
+        $this->assertSame('en.wikipedia.org', $requests[0]->target->host);
+        $this->assertSame(512 * 1024, $requests[0]->maxResponseBytes);
+        $this->assertPinnedRequest($requests[0]);
     }
 
-    public function test_remote_media_download_and_upload_are_both_verified_and_guarded(): void
+    public function test_remote_media_download_and_upload_use_verified_pinned_transports(): void
     {
-        $options = [];
-        Http::fake(function (ClientRequest $request, array $requestOptions) use (&$options) {
-            $options[$request->url()] = $requestOptions;
+        $downloadRequests = [];
+        $uploadRequests = [];
+        $guard = $this->guard();
+        $transport = new WordPressHttpTransport(
+            new SafeOutboundHttpClient(
+                $guard,
+                function (OutboundHttpRequest $request) use (&$downloadRequests): OutboundHttpResponse {
+                    $downloadRequests[] = $request;
 
-            if ($request->url() === 'https://images.example.org/photo.png') {
-                return Factory::response('image-bytes', 200, ['Content-Type' => 'image/png']);
-            }
+                    return new OutboundHttpResponse(
+                        200,
+                        ['Content-Type' => 'image/png'],
+                        base64_decode(self::PNG_1X1, true),
+                    );
+                },
+            ),
+            $guard,
+            function (OutboundHttpRequest $request) use (&$uploadRequests): OutboundHttpResponse {
+                $uploadRequests[] = $request;
 
-            return Factory::response([
-                'id' => 77,
-                'source_url' => 'https://wordpress.example.org/uploads/photo.png',
-                'title' => ['rendered' => 'Photo'],
-            ], 201);
-        });
+                return new OutboundHttpResponse(
+                    201,
+                    ['Content-Type' => 'application/json'],
+                    '{"id":77,"source_url":"https://wordpress.example.org/uploads/photo.png","title":{"rendered":"Photo"}}',
+                );
+            },
+        );
 
-        $result = app(WordPressService::class)->uploadMedia(
+        $result = $this->service($transport)->uploadMedia(
             'https://wordpress.example.org',
             'editor',
             'app-password',
@@ -109,62 +155,105 @@ final class OutboundHttpSecurityTest extends TestCase
         );
 
         $this->assertTrue($result['success']);
-        $this->assertCount(2, $options);
-        foreach ($options as $requestOptions) {
-            $this->assertSecureOptions($requestOptions);
-        }
+        $this->assertCount(1, $downloadRequests);
+        $this->assertCount(1, $uploadRequests);
+        $this->assertSame(WordPressHttpTransport::MAX_IMAGE_BYTES, $downloadRequests[0]->maxResponseBytes);
+        $this->assertPinnedRequest($downloadRequests[0]);
+        $this->assertPinnedRequest($uploadRequests[0]);
+        $this->assertNull($uploadRequests[0]->body);
     }
 
-    public function test_media_manager_rejects_a_private_remote_source_before_dispatch(): void
+    public function test_media_manager_rejects_private_remote_sources_before_dispatch(): void
     {
-        Http::fake();
+        $calls = 0;
+        $service = $this->service($this->transport(function () use (&$calls): OutboundHttpResponse {
+            $calls++;
 
-        $result = app(WordPressManagerService::class)->uploadMedia(
-            [],
-            'http://127.0.0.1/private.png',
-        );
+            return new OutboundHttpResponse(200, ['Content-Type' => 'image/png'], base64_decode(self::PNG_1X1, true));
+        }));
+        $manager = new WordPressManagerService($this->createMock(WpToolkitService::class), $service);
+
+        $result = $manager->uploadMedia([
+            'mode' => 'rest',
+            'url' => 'https://wordpress.example.org',
+            'username' => 'editor',
+            'application_password' => 'app-password',
+        ], 'http://127.0.0.1/private.png');
 
         $this->assertFalse($result['success']);
-        Http::assertNothingSent();
+        $this->assertSame(0, $calls);
     }
 
     public function test_favicon_fallback_uses_verified_guarded_requests(): void
     {
-        $options = null;
-        Http::fake(function (ClientRequest $request, array $requestOptions) use (&$options) {
-            $options = $requestOptions;
+        $requests = [];
+        $service = $this->service($this->transport(function (OutboundHttpRequest $request) use (&$requests): OutboundHttpResponse {
+            $requests[] = $request;
 
-            return Factory::response('<html><link rel="icon" href="/icon.png"></html>');
-        });
+            return new OutboundHttpResponse(
+                200,
+                ['Content-Type' => 'text/html'],
+                '<html><link rel="icon" href="/icon.png"></html>',
+            );
+        }));
+        $manager = new WordPressManagerService($this->createMock(WpToolkitService::class), $service);
 
         $method = new ReflectionMethod(WordPressManagerService::class, 'discoverSiteIconFallback');
-        $result = $method->invoke(app(WordPressManagerService::class), 'https://wordpress.example.org');
+        $result = $method->invoke($manager, 'https://wordpress.example.org');
 
         $this->assertSame('https://wordpress.example.org/icon.png', $result['url']);
-        $this->assertSecureOptions($options);
+        $this->assertSame('html_icon_link', $result['source']);
+        $this->assertCount(1, $requests);
+        $this->assertPinnedRequest($requests[0]);
     }
 
-    private function assertSecureOptions(?array $options): void
+    private function service(WordPressHttpTransport $transport): WordPressService
     {
-        $this->assertIsArray($options);
-        $this->assertTrue($options['verify'] ?? null);
-        $this->assertIsArray($options['allow_redirects'] ?? null);
-        $this->assertTrue($options['allow_redirects']['strict'] ?? false);
-        $this->assertFalse($options['allow_redirects']['referer'] ?? true);
-        $this->assertIsCallable($options['allow_redirects']['on_redirect'] ?? null);
+        return new WordPressService(
+            $transport,
+            new WordPressMediaSourceService(
+                $transport,
+                new ImageInspector,
+                new TemporaryMediaResourceManager,
+            ),
+        );
     }
 
-    private function assertRedirectToPrivateTargetIsRejected(array $options): void
+    private function transport(Closure $transport): WordPressHttpTransport
     {
-        try {
-            $options['allow_redirects']['on_redirect'](
-                null,
-                null,
-                new Uri('http://127.0.0.1/private'),
-            );
-            $this->fail('A redirect to a private target was not rejected.');
-        } catch (UnsafeOutboundUrl) {
-            $this->addToAssertionCount(1);
-        }
+        $guard = $this->guard();
+
+        return new WordPressHttpTransport(
+            new SafeOutboundHttpClient($guard, $transport),
+            $guard,
+        );
+    }
+
+    private function guard(): OutboundUrlGuard
+    {
+        return new OutboundUrlGuard(static fn (string $host): array => match ($host) {
+            'public.example.org', 'wordpress.example.org', 'images.example.org', 'en.wikipedia.org' => ['93.184.216.34'],
+            default => [],
+        });
+    }
+
+    private function assertPinnedRequest(OutboundHttpRequest $request): void
+    {
+        $options = $request->curlOptions();
+
+        $this->assertSame(['93.184.216.34'], $request->target->addresses);
+        $this->assertFalse($options[CURLOPT_FOLLOWLOCATION]);
+        $this->assertTrue($options[CURLOPT_SSL_VERIFYPEER]);
+        $this->assertSame(2, $options[CURLOPT_SSL_VERIFYHOST]);
+        $this->assertSame('', $options[CURLOPT_PROXY]);
+        $this->assertNotEmpty($options[CURLOPT_RESOLVE]);
+    }
+}
+
+final class AuditableWordPressController extends WordPressController
+{
+    public function fetchMetadata(string $url): array
+    {
+        return $this->fetchArticleMetadataForUrl($url);
     }
 }

@@ -2,426 +2,410 @@
 
 namespace hexa_package_wordpress\Services;
 
-use hexa_core\Security\Http\OutboundUrlGuard;
-use Illuminate\Http\Client\ConnectionException;
-use Illuminate\Http\Client\PendingRequest;
-use Illuminate\Support\Facades\Http;
+use hexa_core\Security\Http\OutboundHttpException;
+use hexa_core\Security\Http\OutboundHttpResponse;
+use hexa_package_media\Data\MediaArtifact;
+use hexa_package_media\Exceptions\MediaPipelineException;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class WordPressService
 {
-    /**
-     * Test connection to a WordPress site via REST API.
-     *
-     * @param  string  $siteUrl  Base URL of the WordPress site.
-     * @param  string  $username  WordPress username.
-     * @param  string  $appPassword  WordPress application password.
-     * @return array{success: bool, message: string, data: array|null}
-     */
+    public function __construct(
+        private readonly WordPressHttpTransport $http,
+        private readonly WordPressMediaSourceService $media,
+    ) {}
+
+    /** @return array{success: bool, message: string, data: array|null} */
     public function testConnection(string $siteUrl, string $username, string $appPassword): array
     {
-        $endpoint = rtrim($siteUrl, '/').'/wp-json/wp/v2/users/me';
-
-        try {
-            $response = $this->outboundRequest($endpoint)
-                ->withBasicAuth($username, $appPassword)
-                ->timeout(15)
-                ->get($endpoint);
-
-            if ($response->successful()) {
-                $user = $response->json();
-
-                return [
-                    'success' => true,
-                    'message' => "Connected as '{$user['name']}' (ID: {$user['id']}).",
-                    'data' => [
-                        'user_id' => $user['id'],
-                        'user_name' => $user['name'],
-                        'user_slug' => $user['slug'] ?? null,
-                        'roles' => $user['roles'] ?? [],
-                    ],
-                ];
+        $result = $this->request($siteUrl, $username, $appPassword, 'get', 'users/me', timeoutSeconds: 15);
+        if ($result['success']) {
+            $user = (array) $result['data'];
+            $id = (int) ($user['id'] ?? 0);
+            $name = trim((string) ($user['name'] ?? ''));
+            if ($id <= 0 || $name === '') {
+                return ['success' => false, 'message' => 'WordPress returned an invalid account response.', 'data' => null];
             }
 
-            if ($response->status() === 401) {
-                return ['success' => false, 'message' => 'Authentication failed. Check username and application password.', 'data' => null];
-            }
-
-            if ($response->status() === 403) {
-                return ['success' => false, 'message' => 'Access forbidden. The user may not have sufficient permissions.', 'data' => null];
-            }
-
-            if ($response->status() === 404) {
-                return ['success' => false, 'message' => 'REST API not found. Verify the site URL and that REST API is enabled.', 'data' => null];
-            }
-
-            return ['success' => false, 'message' => "Unexpected response: HTTP {$response->status()}", 'data' => null];
-
-        } catch (ConnectionException $e) {
-            return ['success' => false, 'message' => "Connection failed: could not reach {$siteUrl}. Check the URL.", 'data' => null];
-        } catch (\Exception $e) {
-            Log::error('WordPressService::testConnection error', ['url' => $siteUrl, 'error' => $e->getMessage()]);
-
-            return ['success' => false, 'message' => 'Error: '.$e->getMessage(), 'data' => null];
+            return [
+                'success' => true,
+                'message' => "Connected as '{$name}' (ID: {$id}).",
+                'data' => [
+                    'user_id' => $id,
+                    'user_name' => $name,
+                    'user_slug' => isset($user['slug']) ? (string) $user['slug'] : null,
+                    'roles' => array_values(array_filter((array) ($user['roles'] ?? []), 'is_string')),
+                ],
+            ];
         }
+
+        return match ($result['status']) {
+            401 => ['success' => false, 'message' => 'Authentication failed. Check username and application password.', 'data' => null],
+            403 => ['success' => false, 'message' => 'Access forbidden. The user may not have sufficient permissions.', 'data' => null],
+            404 => ['success' => false, 'message' => 'REST API not found. Verify the site URL and that REST API is enabled.', 'data' => null],
+            default => ['success' => false, 'message' => (string) $result['message'], 'data' => null],
+        };
     }
 
-    /**
-     * Create a post on a WordPress site.
-     *
-     * @param  string  $siteUrl  Base URL of the WordPress site.
-     * @param  string  $username  WordPress username.
-     * @param  string  $appPassword  WordPress application password.
-     * @param  array  $postData  Post data: title, content, status, excerpt, categories, tags, featured_media.
-     * @return array{success: bool, message: string, data: array|null}
-     */
+    /** @return array{success: bool, message: string, data: array|null} */
     public function createPost(string $siteUrl, string $username, string $appPassword, array $postData): array
     {
-        $endpoint = rtrim($siteUrl, '/').'/wp-json/wp/v2/posts';
-
         $payload = [
             'title' => $postData['title'] ?? '',
             'content' => $postData['content'] ?? '',
             'status' => $postData['status'] ?? 'draft',
         ];
 
-        if (! empty($postData['excerpt'])) {
-            $payload['excerpt'] = $postData['excerpt'];
-        }
-
-        if (! empty($postData['categories'])) {
-            $payload['categories'] = $postData['categories'];
-        }
-
-        if (! empty($postData['tags'])) {
-            $payload['tags'] = $postData['tags'];
-        }
-
-        if (! empty($postData['featured_media'])) {
-            $payload['featured_media'] = $postData['featured_media'];
-        }
-
-        try {
-            $response = $this->outboundRequest($endpoint)
-                ->withBasicAuth($username, $appPassword)
-                ->timeout(30)
-                ->post($endpoint, $payload);
-
-            if ($response->successful()) {
-                $post = $response->json();
-
-                return [
-                    'success' => true,
-                    'message' => "Post created: '{$post['title']['rendered']}' (ID: {$post['id']}).",
-                    'data' => [
-                        'post_id' => $post['id'],
-                        'post_url' => $post['link'] ?? null,
-                        'post_status' => $post['status'],
-                        'post_title' => $post['title']['rendered'] ?? '',
-                    ],
-                ];
+        foreach (['excerpt', 'categories', 'tags', 'featured_media'] as $field) {
+            if (! empty($postData[$field])) {
+                $payload[$field] = $postData[$field];
             }
-
-            $error = $response->json();
-            $errorMsg = $error['message'] ?? "HTTP {$response->status()}";
-
-            return ['success' => false, 'message' => "WordPress error: {$errorMsg}", 'data' => null];
-
-        } catch (ConnectionException $e) {
-            return ['success' => false, 'message' => "Connection failed: could not reach {$siteUrl}.", 'data' => null];
-        } catch (\Exception $e) {
-            Log::error('WordPressService::createPost error', ['url' => $siteUrl, 'error' => $e->getMessage()]);
-
-            return ['success' => false, 'message' => 'Error: '.$e->getMessage(), 'data' => null];
         }
+
+        $result = $this->request($siteUrl, $username, $appPassword, 'post', 'posts', $payload);
+        if (! $result['success']) {
+            return ['success' => false, 'message' => 'WordPress error: '.$result['message'], 'data' => null];
+        }
+
+        $post = (array) $result['data'];
+        $postId = (int) ($post['id'] ?? 0);
+        if ($postId <= 0) {
+            return ['success' => false, 'message' => 'WordPress returned an invalid post response.', 'data' => null];
+        }
+
+        return [
+            'success' => true,
+            'message' => 'Post created: \''.$this->rendered($post['title'] ?? '')."' (ID: {$postId}).",
+            'data' => [
+                'post_id' => $postId,
+                'post_url' => isset($post['link']) ? (string) $post['link'] : null,
+                'post_status' => (string) ($post['status'] ?? ''),
+                'post_title' => $this->rendered($post['title'] ?? ''),
+            ],
+        ];
     }
 
-    /**
-     * Update an existing post on a WordPress site.
-     *
-     * @param  string  $siteUrl  Base URL of the WordPress site.
-     * @param  string  $username  WordPress username.
-     * @param  string  $appPassword  WordPress application password.
-     * @param  int  $postId  WordPress post ID.
-     * @param  array  $postData  Fields to update.
-     * @return array{success: bool, message: string, data: array|null}
-     */
+    /** @return array{success: bool, message: string, data: array|null} */
     public function updatePost(string $siteUrl, string $username, string $appPassword, int $postId, array $postData): array
     {
-        $endpoint = rtrim($siteUrl, '/')."/wp-json/wp/v2/posts/{$postId}";
-
         $payload = [];
         foreach (['title', 'content', 'status', 'excerpt', 'date'] as $field) {
             if (isset($postData[$field])) {
                 $payload[$field] = $postData[$field];
             }
         }
-
-        if (! empty($postData['categories'])) {
-            $payload['categories'] = $postData['categories'];
+        foreach (['categories', 'tags', 'featured_media'] as $field) {
+            if (! empty($postData[$field])) {
+                $payload[$field] = $postData[$field];
+            }
         }
-
-        if (! empty($postData['tags'])) {
-            $payload['tags'] = $postData['tags'];
-        }
-
-        if (! empty($postData['featured_media'])) {
-            $payload['featured_media'] = $postData['featured_media'];
-        }
-
         if (! empty($postData['author']) && is_numeric($postData['author'])) {
             $payload['author'] = (int) $postData['author'];
         }
 
-        try {
-            $response = $this->outboundRequest($endpoint)
-                ->withBasicAuth($username, $appPassword)
-                ->timeout(30)
-                ->post($endpoint, $payload);
-
-            if ($response->successful()) {
-                $post = $response->json();
-
-                return [
-                    'success' => true,
-                    'message' => "Post updated (ID: {$post['id']}).",
-                    'data' => [
-                        'post_id' => $post['id'],
-                        'post_url' => $post['link'] ?? null,
-                        'post_status' => $post['status'] ?? null,
-                        'post_title' => $post['title']['rendered'] ?? '',
-                        'post_date' => $post['date'] ?? null,
-                    ],
-                ];
-            }
-
-            $error = $response->json();
-            $errorMsg = $error['message'] ?? "HTTP {$response->status()}";
-
-            return ['success' => false, 'message' => "WordPress error: {$errorMsg}", 'data' => null];
-
-        } catch (\Exception $e) {
-            Log::error('WordPressService::updatePost error', ['url' => $siteUrl, 'postId' => $postId, 'error' => $e->getMessage()]);
-
-            return ['success' => false, 'message' => 'Error: '.$e->getMessage(), 'data' => null];
+        $result = $this->request($siteUrl, $username, $appPassword, 'post', 'posts/'.$postId, $payload);
+        if (! $result['success']) {
+            return ['success' => false, 'message' => 'WordPress error: '.$result['message'], 'data' => null];
         }
+
+        $post = (array) $result['data'];
+        $resolvedId = (int) ($post['id'] ?? 0);
+        if ($resolvedId <= 0) {
+            return ['success' => false, 'message' => 'WordPress returned an invalid post response.', 'data' => null];
+        }
+
+        return [
+            'success' => true,
+            'message' => "Post updated (ID: {$resolvedId}).",
+            'data' => [
+                'post_id' => $resolvedId,
+                'post_url' => isset($post['link']) ? (string) $post['link'] : null,
+                'post_status' => isset($post['status']) ? (string) $post['status'] : null,
+                'post_title' => $this->rendered($post['title'] ?? ''),
+                'post_date' => isset($post['date']) ? (string) $post['date'] : null,
+            ],
+        ];
     }
 
-    /**
-     * Fetch an existing post from a WordPress site.
-     *
-     * @return array{success: bool, message: string, data: array|null}
-     */
+    /** @return array{success: bool, message: string, data: array|null} */
     public function getPost(string $siteUrl, string $username, string $appPassword, int $postId): array
     {
-        $endpoint = rtrim($siteUrl, '/')."/wp-json/wp/v2/posts/{$postId}?context=edit";
+        $result = $this->request(
+            $siteUrl,
+            $username,
+            $appPassword,
+            'get',
+            'posts/'.$postId,
+            query: ['context' => 'edit'],
+        );
+        if (! $result['success']) {
+            return ['success' => false, 'message' => 'WordPress error: '.$result['message'], 'data' => null];
+        }
+
+        $post = (array) $result['data'];
+        $resolvedId = (int) ($post['id'] ?? 0);
+        if ($resolvedId <= 0) {
+            return ['success' => false, 'message' => 'WordPress returned an invalid post response.', 'data' => null];
+        }
+
+        return [
+            'success' => true,
+            'message' => "Post fetched (ID: {$resolvedId}).",
+            'data' => [
+                'post_id' => $resolvedId,
+                'post_url' => isset($post['link']) ? (string) $post['link'] : null,
+                'post_status' => isset($post['status']) ? (string) $post['status'] : null,
+                'post_title' => $this->rendered($post['title'] ?? ''),
+                'post_date' => isset($post['date']) ? (string) $post['date'] : null,
+            ],
+        ];
+    }
+
+    /** @return array{success: bool, message: string, data: array|null} */
+    public function uploadMedia(
+        string $siteUrl,
+        string $username,
+        string $appPassword,
+        string $filePath,
+        string $fileName = '',
+        string $altText = '',
+    ): array {
+        $artifact = null;
 
         try {
-            $response = $this->outboundRequest($endpoint)
-                ->withBasicAuth($username, $appPassword)
-                ->timeout(30)
-                ->get($endpoint);
-
-            if ($response->successful()) {
-                $post = $response->json();
-
-                return [
-                    'success' => true,
-                    'message' => "Post fetched (ID: {$post['id']}).",
-                    'data' => [
-                        'post_id' => $post['id'],
-                        'post_url' => $post['link'] ?? null,
-                        'post_status' => $post['status'] ?? null,
-                        'post_title' => $post['title']['rendered'] ?? '',
-                        'post_date' => $post['date'] ?? null,
-                    ],
-                ];
+            $artifact = $this->media->acquire($filePath, $fileName);
+            $response = $this->http->uploadImage(
+                $this->endpoint($siteUrl, 'media'),
+                $username,
+                $appPassword,
+                $artifact->path,
+                $artifact->filename,
+                $artifact->mimeType,
+                $artifact->bytes,
+            );
+            $payload = $this->decodeResponse($response);
+            if (! $response->successful()) {
+                return ['success' => false, 'message' => 'WordPress error: '.$this->remoteMessage($payload, $response->status), 'data' => null];
             }
 
-            $error = $response->json();
-            $errorMsg = $error['message'] ?? "HTTP {$response->status()}";
+            $mediaId = (int) ($payload['id'] ?? 0);
+            if ($mediaId <= 0) {
+                return ['success' => false, 'message' => 'WordPress returned an invalid media response.', 'data' => null];
+            }
+            if ($altText !== '') {
+                $this->updateMediaAltText($siteUrl, $username, $appPassword, $mediaId, $altText);
+            }
 
-            return ['success' => false, 'message' => "WordPress error: {$errorMsg}", 'data' => null];
+            return [
+                'success' => true,
+                'message' => "Media uploaded: {$artifact->filename} (ID: {$mediaId}).",
+                'data' => [
+                    'media_id' => $mediaId,
+                    'media_url' => isset($payload['source_url']) ? (string) $payload['source_url'] : null,
+                    'media_title' => $this->rendered($payload['title'] ?? $artifact->filename),
+                ],
+            ];
+        } catch (MediaPipelineException $exception) {
+            $this->logFailure('uploadMedia', $siteUrl, $exception, ['error_code' => $exception->errorCode]);
 
-        } catch (\Exception $e) {
-            Log::error('WordPressService::getPost error', ['url' => $siteUrl, 'postId' => $postId, 'error' => $e->getMessage()]);
+            return ['success' => false, 'message' => $this->mediaFailureMessage($exception), 'data' => null];
+        } catch (Throwable $exception) {
+            $this->logFailure('uploadMedia', $siteUrl, $exception);
 
-            return ['success' => false, 'message' => 'Error: '.$e->getMessage(), 'data' => null];
+            return ['success' => false, 'message' => 'The media upload could not be completed securely.', 'data' => null];
+        } finally {
+            if ($artifact instanceof MediaArtifact) {
+                $artifact->release();
+            }
         }
     }
 
     /**
-     * Upload media (image) to a WordPress site.
+     * Shared authenticated REST boundary for WordPressManagerService.
      *
-     * @param  string  $siteUrl  Base URL of the WordPress site.
-     * @param  string  $username  WordPress username.
-     * @param  string  $appPassword  WordPress application password.
-     * @param  string  $filePath  Local file path or URL of the image.
-     * @param  string  $fileName  Desired filename on WordPress.
-     * @param  string  $altText  Alt text for the image.
-     * @return array{success: bool, message: string, data: array|null}
+     * @return array{success: bool, message: string, data: array|null, status: int|null}
      */
-    public function uploadMedia(string $siteUrl, string $username, string $appPassword, string $filePath, string $fileName = '', string $altText = ''): array
-    {
-        $endpoint = rtrim($siteUrl, '/').'/wp-json/wp/v2/media';
+    public function request(
+        string $siteUrl,
+        string $username,
+        string $appPassword,
+        string $method,
+        string $endpoint,
+        array $body = [],
+        array $query = [],
+        int $timeoutSeconds = 30,
+    ): array {
+        if (trim($siteUrl) === '' || trim($username) === '' || $appPassword === '') {
+            return ['success' => false, 'message' => 'REST credentials are incomplete.', 'data' => null, 'status' => null];
+        }
 
         try {
-            // If $filePath is a URL, download it first
-            if (filter_var($filePath, FILTER_VALIDATE_URL)) {
-                $imageResponse = $this->outboundRequest($filePath)
-                    ->timeout(30)
-                    ->get($filePath);
-                if (! $imageResponse->successful()) {
-                    return ['success' => false, 'message' => "Failed to download image from {$filePath}.", 'data' => null];
-                }
-                $imageContent = $imageResponse->body();
-                $contentType = $imageResponse->header('Content-Type') ?: 'image/jpeg';
-                if (! $fileName) {
-                    $fileName = basename(parse_url($filePath, PHP_URL_PATH)) ?: 'image.jpg';
-                }
-            } else {
-                if (! file_exists($filePath)) {
-                    return ['success' => false, 'message' => "File not found: {$filePath}", 'data' => null];
-                }
-                $imageContent = file_get_contents($filePath);
-                $contentType = mime_content_type($filePath) ?: 'image/jpeg';
-                if (! $fileName) {
-                    $fileName = basename($filePath);
-                }
+            $response = $this->http->authenticatedJson(
+                $method,
+                $this->endpoint($siteUrl, $endpoint),
+                $username,
+                $appPassword,
+                $body,
+                $query,
+                $timeoutSeconds,
+            );
+            $payload = $this->decodeResponse($response);
+            if ($response->successful() && $payload === null) {
+                return ['success' => false, 'message' => 'WordPress returned malformed JSON.', 'data' => null, 'status' => $response->status];
             }
 
-            $response = $this->outboundRequest($endpoint)
-                ->withBasicAuth($username, $appPassword)
-                ->withHeaders([
-                    'Content-Disposition' => "attachment; filename=\"{$fileName}\"",
-                    'Content-Type' => $contentType,
-                ])
-                ->timeout(60)
-                ->withBody($imageContent, $contentType)
-                ->post($endpoint);
+            return [
+                'success' => $response->successful(),
+                'message' => $response->successful() ? 'REST request succeeded.' : $this->remoteMessage($payload, $response->status),
+                'data' => $payload,
+                'status' => $response->status,
+            ];
+        } catch (Throwable $exception) {
+            $this->logFailure('request', $siteUrl, $exception, [
+                'endpoint' => substr(ltrim($endpoint, '/'), 0, 160),
+                'method' => strtoupper($method),
+            ]);
 
-            if ($response->successful()) {
-                $media = $response->json();
-
-                // Set alt text if provided
-                if ($altText && isset($media['id'])) {
-                    $this->updateMediaAltText($siteUrl, $username, $appPassword, $media['id'], $altText);
-                }
-
-                return [
-                    'success' => true,
-                    'message' => "Media uploaded: {$fileName} (ID: {$media['id']}).",
-                    'data' => [
-                        'media_id' => $media['id'],
-                        'media_url' => $media['source_url'] ?? null,
-                        'media_title' => $media['title']['rendered'] ?? $fileName,
-                    ],
-                ];
-            }
-
-            $error = $response->json();
-            $errorMsg = $error['message'] ?? "HTTP {$response->status()}";
-
-            return ['success' => false, 'message' => "WordPress error: {$errorMsg}", 'data' => null];
-
-        } catch (\Exception $e) {
-            Log::error('WordPressService::uploadMedia error', ['url' => $siteUrl, 'error' => $e->getMessage()]);
-
-            return ['success' => false, 'message' => 'Error: '.$e->getMessage(), 'data' => null];
+            return [
+                'success' => false,
+                'message' => $exception instanceof OutboundHttpException && $exception->failureCode() === 'invalid_request'
+                    ? 'The WordPress request is invalid or exceeds its security limits.'
+                    : 'The WordPress site could not be reached securely.',
+                'data' => null,
+                'status' => null,
+            ];
         }
     }
 
-    /**
-     * Update alt text on an uploaded media item.
-     */
-    private function updateMediaAltText(string $siteUrl, string $username, string $appPassword, int $mediaId, string $altText): void
-    {
-        $endpoint = rtrim($siteUrl, '/')."/wp-json/wp/v2/media/{$mediaId}";
-
-        try {
-            $this->outboundRequest($endpoint)
-                ->withBasicAuth($username, $appPassword)
-                ->timeout(15)
-                ->post($endpoint, ['alt_text' => $altText]);
-        } catch (\Exception $e) {
-            Log::warning('WordPressService::updateMediaAltText failed', ['mediaId' => $mediaId, 'error' => $e->getMessage()]);
-        }
+    public function publicGet(
+        string $url,
+        array $query = [],
+        array $headers = [],
+        int $timeoutSeconds = 15,
+        int $maxResponseBytes = WordPressHttpTransport::MAX_PUBLIC_DOCUMENT_BYTES,
+        int $maxRedirects = 4,
+    ): OutboundHttpResponse {
+        return $this->http->publicGet($url, $query, $headers, $timeoutSeconds, $maxResponseBytes, $maxRedirects);
     }
 
-    /**
-     * Get categories from a WordPress site.
-     *
-     * @return array{success: bool, message: string, data: array|null}
-     */
+    public function validatedPublicUrl(string $url): ?string
+    {
+        return $this->http->validatedPublicUrl($url);
+    }
+
+    /** @return array{success: bool, message: string, data: array|null} */
     public function getCategories(string $siteUrl, string $username, string $appPassword): array
     {
-        $endpoint = rtrim($siteUrl, '/').'/wp-json/wp/v2/categories?per_page=100';
-
-        try {
-            $response = $this->outboundRequest($endpoint)
-                ->withBasicAuth($username, $appPassword)
-                ->timeout(15)
-                ->get($endpoint);
-
-            if ($response->successful()) {
-                $categories = collect($response->json())->map(fn ($c) => [
-                    'id' => $c['id'],
-                    'name' => $c['name'],
-                    'slug' => $c['slug'],
-                    'count' => $c['count'],
-                ])->toArray();
-
-                return ['success' => true, 'message' => count($categories).' categories found.', 'data' => $categories];
-            }
-
-            return ['success' => false, 'message' => "HTTP {$response->status()}", 'data' => null];
-
-        } catch (\Exception $e) {
-            return ['success' => false, 'message' => 'Error: '.$e->getMessage(), 'data' => null];
-        }
+        return $this->getTerms($siteUrl, $username, $appPassword, 'categories');
     }
 
-    /**
-     * Get tags from a WordPress site.
-     *
-     * @return array{success: bool, message: string, data: array|null}
-     */
+    /** @return array{success: bool, message: string, data: array|null} */
     public function getTags(string $siteUrl, string $username, string $appPassword): array
     {
-        $endpoint = rtrim($siteUrl, '/').'/wp-json/wp/v2/tags?per_page=100';
+        return $this->getTerms($siteUrl, $username, $appPassword, 'tags');
+    }
 
-        try {
-            $response = $this->outboundRequest($endpoint)
-                ->withBasicAuth($username, $appPassword)
-                ->timeout(15)
-                ->get($endpoint);
-
-            if ($response->successful()) {
-                $tags = collect($response->json())->map(fn ($t) => [
-                    'id' => $t['id'],
-                    'name' => $t['name'],
-                    'slug' => $t['slug'],
-                    'count' => $t['count'],
-                ])->toArray();
-
-                return ['success' => true, 'message' => count($tags).' tags found.', 'data' => $tags];
-            }
-
-            return ['success' => false, 'message' => "HTTP {$response->status()}", 'data' => null];
-
-        } catch (\Exception $e) {
-            return ['success' => false, 'message' => 'Error: '.$e->getMessage(), 'data' => null];
+    private function updateMediaAltText(string $siteUrl, string $username, string $appPassword, int $mediaId, string $altText): void
+    {
+        $result = $this->request($siteUrl, $username, $appPassword, 'post', 'media/'.$mediaId, ['alt_text' => $altText], timeoutSeconds: 15);
+        if (! $result['success']) {
+            Log::warning('WordPress media alt-text update failed', ['media_id' => $mediaId, 'status' => $result['status']]);
         }
     }
 
-    private function outboundRequest(string $url): PendingRequest
+    /** @return array{success: bool, message: string, data: array|null} */
+    private function getTerms(string $siteUrl, string $username, string $appPassword, string $endpoint): array
     {
-        $guard = app(OutboundUrlGuard::class);
-        $guard->assertSafe($url);
+        $result = $this->request(
+            $siteUrl,
+            $username,
+            $appPassword,
+            'get',
+            $endpoint,
+            query: ['per_page' => 100],
+            timeoutSeconds: 15,
+        );
+        if (! $result['success']) {
+            return ['success' => false, 'message' => (string) $result['message'], 'data' => null];
+        }
 
-        return Http::withOptions([
-            'verify' => true,
-            'allow_redirects' => $guard->redirectOptions(),
-        ]);
+        $terms = array_values(array_map(
+            static fn (array $term): array => [
+                'id' => (int) ($term['id'] ?? 0),
+                'name' => (string) ($term['name'] ?? ''),
+                'slug' => (string) ($term['slug'] ?? ''),
+                'count' => (int) ($term['count'] ?? 0),
+            ],
+            array_filter((array) $result['data'], 'is_array'),
+        ));
+
+        return ['success' => true, 'message' => count($terms).' '.$endpoint.' found.', 'data' => $terms];
+    }
+
+    private function endpoint(string $siteUrl, string $endpoint): string
+    {
+        $siteUrl = trim($siteUrl);
+        $parts = parse_url($siteUrl);
+        if (
+            ! is_array($parts)
+            || empty($parts['scheme'])
+            || empty($parts['host'])
+            || isset($parts['user'])
+            || isset($parts['pass'])
+            || isset($parts['query'])
+            || isset($parts['fragment'])
+        ) {
+            throw new OutboundHttpException('invalid_request');
+        }
+
+        return rtrim($siteUrl, '/').'/wp-json/wp/v2/'.ltrim($endpoint, '/');
+    }
+
+    /** @return array<string, mixed>|null */
+    private function decodeResponse(OutboundHttpResponse $response): ?array
+    {
+        $decoded = $response->json();
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    private function remoteMessage(?array $payload, int $status): string
+    {
+        $message = is_string($payload['message'] ?? null) ? (string) $payload['message'] : '';
+        $message = trim((string) preg_replace('/[\x00-\x1F\x7F]+/', ' ', strip_tags($message)));
+        if ($message === '') {
+            return 'HTTP '.$status;
+        }
+
+        return function_exists('mb_substr') ? mb_substr($message, 0, 500) : substr($message, 0, 500);
+    }
+
+    private function rendered(mixed $value): string
+    {
+        return is_array($value) ? (string) ($value['rendered'] ?? $value['raw'] ?? '') : (string) $value;
+    }
+
+    private function mediaFailureMessage(MediaPipelineException $exception): string
+    {
+        return match ($exception->errorCode) {
+            'media_file_unreadable' => 'The media file is missing or unreadable.',
+            'media_file_empty', 'media_contents_empty' => 'The media file is empty.',
+            'media_file_too_large' => 'The media file exceeds the 16 MB upload limit.',
+            'unsupported_image_bytes' => 'The media file is not a supported image.',
+            'image_dimensions_too_large' => 'The image dimensions exceed the upload limit.',
+            'image_fully_transparent' => 'The image contains no visible pixels.',
+            'remote_media_http_error' => 'The remote image server rejected the download.',
+            default => 'The media file could not be prepared securely.',
+        };
+    }
+
+    private function logFailure(string $operation, string $siteUrl, Throwable $exception, array $context = []): void
+    {
+        Log::warning('WordPress outbound operation failed', array_merge($context, [
+            'operation' => $operation,
+            'host' => strtolower((string) parse_url($siteUrl, PHP_URL_HOST)),
+            'failure' => $exception instanceof OutboundHttpException ? $exception->failureCode() : $exception::class,
+        ]));
     }
 }

@@ -5,48 +5,23 @@ namespace hexa_package_wordpress\Services\Concerns\WordPressManager;
 use hexa_package_wordpress\Acf\AcfSmartTypeResolver;
 use hexa_package_whm\Models\WhmServer;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 
 trait HandlesWordPressRestAndToolkit
 {
     private function restRequest(array $target, string $method, string $endpoint, array $body = [], array $query = []): array
     {
         $target = $this->normalizeTarget($target);
-        if ($target["url"] === "" || $target["username"] === "" || $target["application_password"] === "") {
-            return ["success" => false, "message" => "REST credentials are incomplete.", "data" => null, "status" => null];
-        }
 
-        $url = $target["url"] . "/wp-json/wp/v2/" . ltrim($endpoint, "/");
-
-        try {
-            $request = Http::withBasicAuth($target["username"], $target["application_password"])->timeout(60);
-            $response = match (strtolower($method)) {
-                "get" => $request->get($url, $query),
-                "delete" => $request->delete($url, $body ?: $query),
-                default => $request->post($url, $body),
-            };
-
-            if ($response->successful()) {
-                return ["success" => true, "message" => "REST request succeeded.", "data" => $response->json(), "status" => $response->status()];
-            }
-
-            $payload = $response->json();
-            return [
-                "success" => false,
-                "message" => is_array($payload) && !empty($payload["message"]) ? (string) $payload["message"] : ("HTTP " . $response->status()),
-                "data" => is_array($payload) ? $payload : null,
-                "status" => $response->status(),
-            ];
-        } catch (\Throwable $e) {
-            Log::warning("WordPressManagerService::restRequest failed", [
-                "endpoint" => $endpoint,
-                "method" => $method,
-                "error" => $e->getMessage(),
-            ]);
-
-            return ["success" => false, "message" => $e->getMessage(), "data" => null, "status" => null];
-        }
+        return $this->rest->request(
+            $target["url"],
+            $target["username"],
+            $target["application_password"],
+            $method,
+            $endpoint,
+            $body,
+            $query,
+            60,
+        );
     }
 
     private function fetchPublicationTermsViaDb(WhmServer $server, int $installId): array
