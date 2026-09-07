@@ -2,197 +2,102 @@
 
 namespace hexa_package_wordpress\Services\Concerns\WordPressManager;
 
-use hexa_package_wordpress\Acf\AcfSmartTypeResolver;
-use hexa_package_whm\Models\WhmServer;
+use hexa_package_wordpress\Data\WordPressPostMutation;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 
 trait ManagesWordPressPosts
 {
-    public function createPost(array $target, string $title, string $content, string $status = "draft", array $options = []): array
+    public function createPost(array $target, string $title, string $content, string $status = 'draft', array $options = []): array
     {
         $target = $this->normalizeTarget($target);
-        $payload = $this->normalizePostPayload(array_merge($options, [
-            "title" => $title,
-            "content" => $content,
-            "status" => $status,
+        $mutation = WordPressPostMutation::fromArray(array_merge($options, [
+            'title' => $title,
+            'content' => $content,
+            'status' => $status,
         ]));
-        $postType = trim((string) ($payload["post_type"] ?? "post")) ?: "post";
+        if (! $mutation->isValid()) {
+            return $this->invalidPostMutationResult($mutation);
+        }
 
         if ($this->usesWpToolkit($target)) {
-            $result = $this->wptoolkit->wpCliCreatePost(
-                $target["server"],
-                (int) $target["install_id"],
-                (string) ($payload["title"] ?? ""),
-                (string) ($payload["content"] ?? ""),
-                (string) ($payload["status"] ?? "draft"),
-                (array) ($payload["categories"] ?? []),
-                (array) ($payload["tags"] ?? []),
-                $payload["date"] ?? null,
-                $payload["author"] ?? ($target["default_author"] ?: null),
-                isset($payload["featured_media"]) ? (int) $payload["featured_media"] : null,
-                $postType,
-            );
+            $mutation = $mutation->withDefaultAuthor((string) ($target['default_author'] ?? ''));
 
-            if (($result["success"] ?? false) && !empty($result["data"]["post_id"]) && !empty($payload["taxonomies"])) {
-                $postId = (int) $result["data"]["post_id"];
-                $verification = $this->applyToolkitPostTaxonomies(
-                    $target,
-                    $postId,
-                    (array) $payload["taxonomies"],
-                );
-                $result["data"]["taxonomy_verification"] = $verification;
-
-                if (!($verification["success"] ?? false)) {
-                    try {
-                        $rollback = $this->deletePost($target, $postId, true);
-                    } catch (\Throwable $exception) {
-                        $rollback = ["success" => false, "message" => $exception->getMessage()];
-                    }
-
-                    $result["data"]["rollback"] = $rollback;
-                    $result["success"] = false;
-                    $result["message"] = "Post creation was rolled back because taxonomy verification failed: "
-                        . (string) ($verification["message"] ?? "Unknown taxonomy error.");
-                }
-            }
-
-            return $result;
+            return $this->createToolkitPost($target, $mutation->toArray());
         }
 
-        $endpoint = $postType === "post" ? "posts" : trim($postType, "/");
-        $response = $this->restRequest($target, "post", $endpoint, $this->buildRestPostPayload($payload));
-        if (!($response["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($response["message"] ?? "REST publish failed."), "data" => null];
-        }
+        $payload = $mutation->toArray();
+        $postType = $mutation->postType;
+        $endpoint = $postType === 'post' ? 'posts' : trim($postType, '/');
 
-        return ["success" => true, "message" => "Post created via REST.", "data" => $this->formatRestPostData((array) $response["data"])];
+        return $this->createRestPost($target, $endpoint, $payload);
     }
 
     public function updatePost(array $target, int $postId, array $postData): array
     {
         $target = $this->normalizeTarget($target);
-        $payload = $this->normalizePostPayload($postData);
+        $mutation = WordPressPostMutation::fromArray($postData);
+        if (! $mutation->isValid()) {
+            return $this->invalidPostMutationResult($mutation);
+        }
+
+        $payload = $mutation->toArray();
 
         if ($this->usesWpToolkit($target)) {
-            $result = $this->wptoolkit->wpCliUpdatePost($target["server"], (int) $target["install_id"], $postId, $this->buildToolkitPostData($payload));
-            if (($result["success"] ?? false) && !empty($payload["taxonomies"])) {
-                $verification = $this->applyToolkitPostTaxonomies(
-                    $target,
-                    $postId,
-                    (array) $payload["taxonomies"],
-                );
-                $result["data"] = array_merge((array) ($result["data"] ?? []), [
-                    "taxonomy_verification" => $verification,
-                ]);
-
-                if (!($verification["success"] ?? false)) {
-                    $result["success"] = false;
-                    $result["message"] = "Post fields were updated, but taxonomy verification failed: "
-                        . (string) ($verification["message"] ?? "Unknown taxonomy error.");
-                }
-            }
-            return $result;
+            return $this->updateToolkitPost($target, $postId, $payload);
         }
 
-        $response = $this->restRequest($target, "post", "posts/" . $postId, $this->buildRestPostPayload($payload));
-        if (!($response["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($response["message"] ?? "REST update failed."), "data" => null];
-        }
+        $postType = ($payload['_provided']['post_type'] ?? false) ? (string) $payload['post_type'] : 'post';
+        $endpoint = $postType === 'post' ? 'posts' : trim($postType, '/');
 
-        return ["success" => true, "message" => "Post updated via REST.", "data" => $this->formatRestPostData((array) $response["data"])];
+        return $this->updateRestPost($target, $endpoint, $postId, $payload);
     }
 
     /**
-     * Apply each taxonomy and require WordPress to confirm the exact term IDs.
-     * A second attempt absorbs transient WP-CLI or object-cache failures.
+     * Compatibility adapter for package consumers that reflect or reuse the
+     * historical normalized array shape.
+     *
+     * @return array<string, mixed>
      */
-    private function applyToolkitPostTaxonomies(array $target, int $postId, array $taxonomies): array
+    private function normalizePostPayload(array $payload): array
     {
-        $verified = [];
+        return WordPressPostMutation::fromArray($payload)->toArray();
+    }
 
-        foreach ($taxonomies as $taxonomy => $termIds) {
-            $taxonomy = trim((string) $taxonomy);
-            $expected = array_values(array_unique(array_filter(array_map("intval", (array) $termIds))));
-            sort($expected, SORT_NUMERIC);
-            $lastResult = null;
-
-            for ($attempt = 1; $attempt <= 2; $attempt++) {
-                try {
-                    $assignment = $this->setPostTerms($target, $postId, $taxonomy, $expected);
-                } catch (\Throwable $exception) {
-                    $assignment = [
-                        "success" => false,
-                        "message" => $exception->getMessage(),
-                        "term_ids" => [],
-                    ];
-                }
-
-                $actual = array_values(array_unique(array_map("intval", (array) ($assignment["term_ids"] ?? []))));
-                sort($actual, SORT_NUMERIC);
-                $lastResult = [
-                    "success" => (bool) ($assignment["success"] ?? false) && $actual === $expected,
-                    "attempts" => $attempt,
-                    "expected" => $expected,
-                    "actual" => $actual,
-                    "message" => (string) ($assignment["message"] ?? "Taxonomy assignment failed."),
-                ];
-
-                if ($lastResult["success"]) {
-                    break;
-                }
-            }
-
-            $verified[$taxonomy] = $lastResult;
-            if (!($lastResult["success"] ?? false)) {
-                return [
-                    "success" => false,
-                    "message" => sprintf(
-                        "%s expected [%s] but WordPress confirmed [%s]. %s",
-                        $taxonomy !== "" ? $taxonomy : "Taxonomy",
-                        implode(", ", $expected),
-                        implode(", ", (array) ($lastResult["actual"] ?? [])),
-                        (string) ($lastResult["message"] ?? ""),
-                    ),
-                    "taxonomies" => $verified,
-                ];
-            }
-        }
-
+    private function invalidPostMutationResult(WordPressPostMutation $mutation): array
+    {
         return [
-            "success" => true,
-            "message" => "Post taxonomies were assigned and verified.",
-            "taxonomies" => $verified,
+            'success' => false,
+            'message' => 'Invalid WordPress post mutation: '.implode(' ', $mutation->validationErrors),
+            'data' => ['validation_errors' => $mutation->validationErrors],
         ];
     }
 
-    public function getPost(array $target, int $postId, string $postType = "posts"): array
+    public function getPost(array $target, int $postId, string $postType = 'posts'): array
     {
         $target = $this->normalizeTarget($target);
         if ($this->usesWpToolkit($target)) {
-            return $this->wptoolkit->wpCliGetPost($target["server"], (int) $target["install_id"], $postId);
+            return $this->getToolkitPostSnapshot($target, $postId);
         }
 
-        $response = $this->restRequest($target, "get", trim($postType, "/") . "/" . $postId, [], ["context" => "edit"]);
-        if (!($response["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($response["message"] ?? "REST fetch failed."), "data" => null];
+        $response = $this->restRequest($target, 'get', trim($postType, '/').'/'.$postId, [], ['context' => 'edit']);
+        if (! ($response['success'] ?? false)) {
+            return ['success' => false, 'message' => (string) ($response['message'] ?? 'REST fetch failed.'), 'data' => null];
         }
 
-        return ["success" => true, "message" => "Post fetched via REST.", "data" => $this->formatRestPostData((array) $response["data"])];
+        return ['success' => true, 'message' => 'Post fetched via REST.', 'data' => $this->formatRestPostData((array) $response['data'])];
     }
 
     /**
      * Load a complete, read-only post snapshot for reusable administrative previews.
      * Raw metadata stays internal so registered extensions can derive provider data.
      *
-     * @param array<string, mixed> $target
+     * @param  array<string, mixed>  $target
      * @return array{success: bool, message: string, post: array<string, mixed>|null}
      */
-    public function getPostSnapshot(array $target, int $postId, string $postType = "post"): array
+    public function getPostSnapshot(array $target, int $postId, string $postType = 'post'): array
     {
         if ($postId <= 0) {
-            return ["success" => false, "message" => "A WordPress post ID is required.", "post" => null];
+            return ['success' => false, 'message' => 'A WordPress post ID is required.', 'post' => null];
         }
 
         $target = $this->normalizeTarget($target);
@@ -299,105 +204,112 @@ echo "HEXA_POST_SNAPSHOT:" . wp_json_encode(["success" => true, "post" => $paylo
 PHP;
             $result = $this->evaluatePhp(
                 $target,
-                str_replace("__POST_ID__", (string) $postId, $php)
+                str_replace('__POST_ID__', (string) $postId, $php)
             );
-            if (! ($result["success"] ?? false)) {
+            if (! ($result['success'] ?? false)) {
                 return [
-                    "success" => false,
-                    "message" => (string) ($result["message"] ?? "WordPress post snapshot failed."),
-                    "post" => null,
+                    'success' => false,
+                    'message' => (string) ($result['message'] ?? 'WordPress post snapshot failed.'),
+                    'post' => null,
                 ];
             }
 
             $payload = $this->decodeMarkedPayload(
-                (string) ($result["stdout"] ?? ""),
-                "HEXA_POST_SNAPSHOT:"
+                (string) ($result['stdout'] ?? ''),
+                'HEXA_POST_SNAPSHOT:'
             );
-            if (! is_array($payload) || ! ($payload["success"] ?? false)) {
+            if (! is_array($payload) || ! ($payload['success'] ?? false)) {
                 return [
-                    "success" => false,
-                    "message" => (string) ($payload["message"] ?? "WordPress post snapshot could not be parsed."),
-                    "post" => null,
+                    'success' => false,
+                    'message' => (string) ($payload['message'] ?? 'WordPress post snapshot could not be parsed.'),
+                    'post' => null,
                 ];
             }
 
             return [
-                "success" => true,
-                "message" => "WordPress post snapshot loaded via WP Toolkit.",
-                "post" => (array) ($payload["post"] ?? []),
+                'success' => true,
+                'message' => 'WordPress post snapshot loaded via WP Toolkit.',
+                'post' => (array) ($payload['post'] ?? []),
             ];
         }
 
-        $endpoint = trim($postType, "/");
-        $endpoint = $endpoint === "post" ? "posts" : $endpoint;
-        $response = $this->restRequest($target, "get", $endpoint . "/" . $postId, [], ["context" => "edit"]);
-        if (! ($response["success"] ?? false) || ! is_array($response["data"] ?? null)) {
+        $endpoint = trim($postType, '/');
+        $endpoint = $endpoint === 'post' ? 'posts' : $endpoint;
+        $response = $this->restRequest($target, 'get', $endpoint.'/'.$postId, [], ['context' => 'edit']);
+        if (! ($response['success'] ?? false) || ! is_array($response['data'] ?? null)) {
             return [
-                "success" => false,
-                "message" => (string) ($response["message"] ?? "WordPress REST post snapshot failed."),
-                "post" => null,
+                'success' => false,
+                'message' => (string) ($response['message'] ?? 'WordPress REST post snapshot failed.'),
+                'post' => null,
             ];
         }
 
-        $post = (array) $response["data"];
+        $post = (array) $response['data'];
+
         return [
-            "success" => true,
-            "message" => "WordPress post snapshot loaded via REST.",
-            "post" => [
-                "id" => (int) ($post["id"] ?? $postId),
-                "title" => (string) data_get($post, "title.rendered", data_get($post, "title.raw", "")),
-                "slug" => (string) ($post["slug"] ?? ""),
-                "type" => (string) ($post["type"] ?? $postType),
-                "status" => (string) ($post["status"] ?? ""),
-                "status_label" => ucfirst((string) ($post["status"] ?? "unknown")),
-                "content_raw" => (string) data_get($post, "content.raw", ""),
-                "content_html" => (string) data_get($post, "content.rendered", ""),
-                "excerpt_raw" => (string) data_get($post, "excerpt.raw", ""),
-                "excerpt_html" => (string) data_get($post, "excerpt.rendered", ""),
-                "permalink" => (string) ($post["link"] ?? ""),
-                "preview_url" => (string) data_get($post, "_links.preview.0.href", ""),
-                "edit_url" => "",
-                "date" => $post["date"] ?? null,
-                "date_gmt" => $post["date_gmt"] ?? null,
-                "modified" => $post["modified"] ?? null,
-                "modified_gmt" => $post["modified_gmt"] ?? null,
-                "author" => ["id" => (int) ($post["author"] ?? 0)],
-                "featured_image" => isset($post["featured_media"])
-                    ? ["id" => (int) $post["featured_media"]]
+            'success' => true,
+            'message' => 'WordPress post snapshot loaded via REST.',
+            'post' => [
+                'id' => (int) ($post['id'] ?? $postId),
+                'title' => (string) data_get($post, 'title.rendered', data_get($post, 'title.raw', '')),
+                'slug' => (string) ($post['slug'] ?? ''),
+                'type' => (string) ($post['type'] ?? $postType),
+                'status' => (string) ($post['status'] ?? ''),
+                'status_label' => ucfirst((string) ($post['status'] ?? 'unknown')),
+                'content_raw' => (string) data_get($post, 'content.raw', ''),
+                'content_html' => (string) data_get($post, 'content.rendered', ''),
+                'excerpt_raw' => (string) data_get($post, 'excerpt.raw', ''),
+                'excerpt_html' => (string) data_get($post, 'excerpt.rendered', ''),
+                'permalink' => (string) ($post['link'] ?? ''),
+                'preview_url' => (string) data_get($post, '_links.preview.0.href', ''),
+                'edit_url' => '',
+                'date' => $post['date'] ?? null,
+                'date_gmt' => $post['date_gmt'] ?? null,
+                'modified' => $post['modified'] ?? null,
+                'modified_gmt' => $post['modified_gmt'] ?? null,
+                'author' => ['id' => (int) ($post['author'] ?? 0)],
+                'featured_image' => isset($post['featured_media'])
+                    ? ['id' => (int) $post['featured_media']]
                     : null,
-                "taxonomies" => [],
-                "comment_status" => (string) ($post["comment_status"] ?? ""),
-                "ping_status" => (string) ($post["ping_status"] ?? ""),
-                "comment_count" => 0,
-                "parent_id" => (int) ($post["parent"] ?? 0),
-                "menu_order" => (int) ($post["menu_order"] ?? 0),
-                "password_protected" => (string) ($post["password"] ?? "") !== "",
-                "meta" => (array) ($post["meta"] ?? []),
+                'taxonomies' => [],
+                'comment_status' => (string) ($post['comment_status'] ?? ''),
+                'ping_status' => (string) ($post['ping_status'] ?? ''),
+                'comment_count' => 0,
+                'parent_id' => (int) ($post['parent'] ?? 0),
+                'menu_order' => (int) ($post['menu_order'] ?? 0),
+                'password_protected' => (string) ($post['password'] ?? '') !== '',
+                'meta' => (array) ($post['meta'] ?? []),
             ],
         ];
     }
 
-    public function listPosts(array $target, array $query = [], string $postType = "posts"): array
+    public function listPosts(array $target, array $query = [], string $postType = 'posts'): array
     {
         $target = $this->normalizeTarget($target);
 
         if ($this->usesWpToolkit($target)) {
-            $cliPostType = $postType === "posts" ? "post" : rtrim($postType, "s");
-            $authorId = max(0, (int) ($query["author"] ?? 0));
-            $perPage = max(1, min(100, (int) ($query["per_page"] ?? 100)));
+            $cliPostType = $postType === 'posts' ? 'post' : rtrim($postType, 's');
+            $authorId = max(0, (int) ($query['author'] ?? 0));
+            $perPage = max(1, min(100, (int) ($query['per_page'] ?? 100)));
+            $page = max(1, (int) ($query['page'] ?? 1));
+            $slug = trim((string) ($query['slug'] ?? ''));
+            $search = trim((string) ($query['search'] ?? ''));
             $parts = [
                 '$args=[',
-                '"post_type"=>' . var_export($cliPostType, true) . ',',
-                '"post_status"=>' . var_export((string) ($query["status"] ?? "any"), true) . ',',
-                '"posts_per_page"=>' . $perPage . ',',
-                '"orderby"=>' . var_export((string) ($query["orderby"] ?? "date"), true) . ',',
-                '"order"=>' . var_export(strtoupper((string) ($query["order"] ?? "DESC")), true) . ',',
+                '"post_type"=>'.var_export($cliPostType, true).',',
+                '"post_status"=>'.var_export((string) ($query['status'] ?? 'any'), true).',',
+                '"posts_per_page"=>'.$perPage.',',
+                '"paged"=>'.$page.',',
+                '"orderby"=>'.var_export((string) ($query['orderby'] ?? 'date'), true).',',
+                '"order"=>'.var_export(strtoupper((string) ($query['order'] ?? 'DESC')), true).',',
                 '"fields"=>"ids",',
                 '];',
-                'if (' . $authorId . '>0) { $args["author"]=' . $authorId . '; }',
+                'if ('.$authorId.'>0) { $args["author"]='.$authorId.'; }',
+                'if ('.var_export($slug !== '', true).') { $args["name"]='.var_export($slug, true).'; }',
+                'if ('.var_export($search !== '', true).') { $args["s"]='.var_export($search, true).'; }',
                 '$dateQuery=[];',
-                'if (' . var_export(!empty($query["after"]), true) . ') { $dateQuery[]=["after"=>' . var_export((string) ($query["after"] ?? ""), true) . ']; }',
-                'if (' . var_export(!empty($query["before"]), true) . ') { $dateQuery[]=["before"=>' . var_export((string) ($query["before"] ?? ""), true) . ']; }',
+                'if ('.var_export(! empty($query['after']), true).') { $dateQuery[]=["after"=>'.var_export((string) ($query['after'] ?? ''), true).']; }',
+                'if ('.var_export(! empty($query['before']), true).') { $dateQuery[]=["before"=>'.var_export((string) ($query['before'] ?? ''), true).']; }',
                 'if (!empty($dateQuery)) { $args["date_query"]=$dateQuery; }',
                 '$query=new WP_Query($args);',
                 '$rows=[];',
@@ -415,69 +327,70 @@ PHP;
                 '}',
                 'echo "HEXA_POST_LIST:" . wp_json_encode($rows);',
             ];
-            $php = implode("", $parts);
+            $php = implode('', $parts);
 
             $eval = $this->evaluatePhp($target, $php);
-            if (!($eval["success"] ?? false)) {
-                return ["success" => false, "message" => (string) ($eval["message"] ?? "WP Toolkit list posts failed."), "data" => []];
+            $payload = $this->decodeMarkedPayload((string) ($eval['stdout'] ?? ''), 'HEXA_POST_LIST:');
+            if (! is_array($payload)) {
+                if (! ($eval['success'] ?? false)) {
+                    return ['success' => false, 'message' => (string) ($eval['message'] ?? 'WP Toolkit list posts failed.'), 'data' => []];
+                }
+
+                return ['success' => false, 'message' => 'Failed to parse WP Toolkit post list output.', 'data' => []];
             }
 
-            $payload = $this->decodeMarkedPayload((string) ($eval["stdout"] ?? ""), "HEXA_POST_LIST:");
-            if (!is_array($payload)) {
-                return ["success" => false, "message" => "Failed to parse WP Toolkit post list output.", "data" => []];
-            }
-
-            return ["success" => true, "message" => count($payload) . " post(s) loaded via WP Toolkit.", "data" => $payload];
+            return ['success' => true, 'message' => count($payload).' post(s) loaded via WP Toolkit.', 'data' => $payload];
         }
 
-        $response = $this->restRequest($target, "get", trim($postType, "/"), [], $query);
+        $response = $this->restRequest($target, 'get', trim($postType, '/'), [], $query);
+
         return [
-            "success" => (bool) ($response["success"] ?? false),
-            "message" => (string) ($response["message"] ?? "REST list failed."),
-            "data" => ($response["success"] ?? false) ? array_values((array) ($response["data"] ?? [])) : [],
+            'success' => (bool) ($response['success'] ?? false),
+            'message' => (string) ($response['message'] ?? 'REST list failed.'),
+            'data' => ($response['success'] ?? false) ? array_values((array) ($response['data'] ?? [])) : [],
         ];
     }
-
 
     public function listMedia(array $target, array $query = []): array
     {
         $target = $this->normalizeTarget($target);
-        $mimeType = trim((string) ($query["mime_type"] ?? "image"));
-        $perPage = max(1, min(100, (int) ($query["per_page"] ?? 60)));
-        $page = max(1, (int) ($query["page"] ?? 1));
-        $search = trim((string) ($query["search"] ?? ""));
-        $forceRefresh = (bool) ($query["force_refresh"] ?? false);
+        $mimeType = trim((string) ($query['mime_type'] ?? 'image'));
+        $perPage = max(1, min(100, (int) ($query['per_page'] ?? 60)));
+        $page = max(1, (int) ($query['page'] ?? 1));
+        $search = trim((string) ($query['search'] ?? ''));
+        $forceRefresh = (bool) ($query['force_refresh'] ?? false);
 
         if ($this->usesWpToolkit($target)) {
-            if (method_exists($this->wptoolkit, "wpCliMediaSelector")) {
+            if (method_exists($this->wptoolkit, 'wpCliMediaSelector')) {
                 $selectorQuery = [
-                    "mime_type" => $mimeType,
-                    "per_page" => $perPage,
-                    "page" => $page,
-                    "search" => $search,
-                    "include_ids" => (array) ($query["include_ids"] ?? []),
+                    'mime_type' => $mimeType,
+                    'per_page' => $perPage,
+                    'page' => $page,
+                    'search' => $search,
+                    'include_ids' => (array) ($query['include_ids'] ?? []),
                 ];
-                $loader = fn (): array => $this->wptoolkit->wpCliMediaSelector($target["server"], (int) $target["install_id"], $selectorQuery);
-                $cacheable = empty($selectorQuery["include_ids"]);
-                $selector = (!$cacheable || $forceRefresh)
+                $loader = fn (): array => $this->wptoolkit->wpCliMediaSelector($target['server'], (int) $target['install_id'], $selectorQuery);
+                $cacheable = empty($selectorQuery['include_ids']);
+                $selector = (! $cacheable || $forceRefresh)
                     ? $loader()
-                    : Cache::remember($this->toolkitCacheKey($target, "media", md5(json_encode($selectorQuery))), now()->addMinutes(5), $loader);
-                $items = array_values(array_filter((array) ($selector["items"] ?? []), "is_array"));
+                    : Cache::remember($this->toolkitCacheKey($target, 'media', md5(json_encode($selectorQuery))), now()->addMinutes(5), $loader);
+                $items = array_values(array_filter((array) ($selector['items'] ?? []), 'is_array'));
+
                 return array_replace($selector, [
-                    "success" => (bool) ($selector["success"] ?? false),
-                    "message" => (string) ($selector["message"] ?? (count($items) . " media item(s) loaded via WP Toolkit selector.")),
-                    "items" => $items,
-                    "data" => $items,
-                    "source" => "wptoolkit.media_selector",
-                    "cached" => $cacheable && !$forceRefresh,
+                    'success' => (bool) ($selector['success'] ?? false),
+                    'message' => (string) ($selector['message'] ?? (count($items).' media item(s) loaded via WP Toolkit selector.')),
+                    'items' => $items,
+                    'data' => $items,
+                    'source' => 'wptoolkit.media_selector',
+                    'cached' => $cacheable && ! $forceRefresh,
                 ]);
             }
 
             $parts = [
-                '$mimeType=' . var_export($mimeType, true) . ';',
-                '$perPage=' . $perPage . ';',
-                '$page=' . $page . ';',
-                '$search=' . var_export($search, true) . ';',
+                '$mimeType='.var_export($mimeType, true).';',
+                '$perPage='.$perPage.';',
+                '$page='.$page.';',
+                '$search='.var_export($search, true).';',
                 '$args=["post_type"=>"attachment","post_status"=>"inherit","posts_per_page"=>$perPage,"paged"=>$page,"orderby"=>"date","order"=>"DESC"];',
                 'if ($mimeType !== "") { $args["post_mime_type"]=$mimeType; }',
                 'if ($search !== "") { $args["s"]=$search; }',
@@ -492,40 +405,46 @@ PHP;
                 '}',
                 'echo "HEXA_MEDIA_LIST:" . wp_json_encode(["success"=>true,"message"=>count($items)." media item(s) loaded via WP Toolkit.","items"=>$items]);',
             ];
-            $result = $this->evaluatePhp($target, implode("", $parts));
-            if (!($result["success"] ?? false)) {
-                return ["success" => false, "message" => (string) ($result["message"] ?? "Media list failed."), "items" => []];
+            $result = $this->evaluatePhp($target, implode('', $parts));
+            if (! ($result['success'] ?? false)) {
+                return ['success' => false, 'message' => (string) ($result['message'] ?? 'Media list failed.'), 'items' => []];
             }
-            $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_MEDIA_LIST:");
-            if (!is_array($payload)) {
-                return ["success" => false, "message" => "Failed to parse WordPress media list output.", "items" => []];
+            $payload = $this->decodeMarkedPayload((string) ($result['stdout'] ?? ''), 'HEXA_MEDIA_LIST:');
+            if (! is_array($payload)) {
+                return ['success' => false, 'message' => 'Failed to parse WordPress media list output.', 'items' => []];
             }
-            $items = array_values(array_filter((array) ($payload["items"] ?? []), "is_array"));
-            return ["success" => true, "message" => (string) ($payload["message"] ?? (count($items) . " media item(s) loaded.")), "items" => $items, "data" => $items];
+            $items = array_values(array_filter((array) ($payload['items'] ?? []), 'is_array'));
+
+            return ['success' => true, 'message' => (string) ($payload['message'] ?? (count($items).' media item(s) loaded.')), 'items' => $items, 'data' => $items];
         }
 
-        $restQuery = ["per_page" => $perPage, "page" => $page];
-        if ($search !== "") $restQuery["search"] = $search;
-        if ($mimeType !== "") {
-            if (str_contains($mimeType, "/")) $restQuery["mime_type"] = $mimeType;
-            else $restQuery["media_type"] = $mimeType;
+        $restQuery = ['per_page' => $perPage, 'page' => $page];
+        if ($search !== '') {
+            $restQuery['search'] = $search;
         }
-        $response = $this->restRequest($target, "get", "media", [], $restQuery);
-        $items = array_values(array_filter((array) ($response["data"] ?? []), "is_array"));
+        if ($mimeType !== '') {
+            if (str_contains($mimeType, '/')) {
+                $restQuery['mime_type'] = $mimeType;
+            } else {
+                $restQuery['media_type'] = $mimeType;
+            }
+        }
+        $response = $this->restRequest($target, 'get', 'media', [], $restQuery);
+        $items = array_values(array_filter((array) ($response['data'] ?? []), 'is_array'));
         $items = array_map(static function (array $item): array {
-            $sizes = is_array($item["media_details"]["sizes"] ?? null) ? $item["media_details"]["sizes"] : [];
-            $thumbnail = (string) ($sizes["thumbnail"]["source_url"] ?? ($item["source_url"] ?? ""));
-            $medium = (string) ($sizes["medium"]["source_url"] ?? ($thumbnail ?: ($item["source_url"] ?? "")));
+            $sizes = is_array($item['media_details']['sizes'] ?? null) ? $item['media_details']['sizes'] : [];
+            $thumbnail = (string) ($sizes['thumbnail']['source_url'] ?? ($item['source_url'] ?? ''));
+            $medium = (string) ($sizes['medium']['source_url'] ?? ($thumbnail ?: ($item['source_url'] ?? '')));
+
             return array_replace($item, [
-                "ID" => (int) ($item["id"] ?? 0),
-                "url" => (string) ($item["source_url"] ?? ""),
-                "media_url" => (string) ($item["source_url"] ?? ""),
-                "thumbnail_url" => $thumbnail,
-                "medium_url" => $medium,
+                'ID' => (int) ($item['id'] ?? 0),
+                'url' => (string) ($item['source_url'] ?? ''),
+                'media_url' => (string) ($item['source_url'] ?? ''),
+                'thumbnail_url' => $thumbnail,
+                'medium_url' => $medium,
             ]);
         }, $items);
-        return ["success" => (bool) ($response["success"] ?? false), "message" => ($response["success"] ?? false) ? "Media loaded via REST." : (string) ($response["message"] ?? "Media list failed."), "items" => $items, "data" => $items];
+
+        return ['success' => (bool) ($response['success'] ?? false), 'message' => ($response['success'] ?? false) ? 'Media loaded via REST.' : (string) ($response['message'] ?? 'Media list failed.'), 'items' => $items, 'data' => $items];
     }
-
-
 }

@@ -86,12 +86,35 @@ trait HandlesWordPressRestAndToolkit
 
     private function formatRestPostData(array $post): array
     {
+        $excerpt = $post["excerpt"] ?? "";
+        if (is_array($excerpt)) {
+            $excerpt = $excerpt["raw"] ?? $excerpt["rendered"] ?? "";
+        }
+        $content = $post["content"] ?? "";
+        if (is_array($content)) {
+            $content = $content["raw"] ?? $content["rendered"] ?? "";
+        }
+        $title = $post["title"] ?? "";
+        if (is_array($title)) {
+            $title = $title["raw"] ?? $title["rendered"] ?? "";
+        }
+
         return [
             "post_id" => (int) ($post["id"] ?? 0),
             "post_url" => (string) ($post["link"] ?? ""),
             "post_status" => (string) ($post["status"] ?? ""),
-            "post_title" => (string) (($post["title"]["rendered"] ?? $post["title"] ?? "") ?: ""),
+            "post_title" => (string) $title,
+            "post_content" => (string) $content,
+            "post_excerpt" => (string) $excerpt,
             "post_date" => isset($post["date"]) ? (string) $post["date"] : null,
+            "post_slug" => (string) ($post["slug"] ?? ""),
+            "post_type" => (string) ($post["type"] ?? "post"),
+            "author_id" => (int) ($post["author"] ?? 0),
+            "featured_media" => (int) ($post["featured_media"] ?? 0),
+            "categories" => array_values(array_map("intval", (array) ($post["categories"] ?? []))),
+            "tags" => array_values(array_map("intval", (array) ($post["tags"] ?? []))),
+            "post_content_bytes" => strlen((string) $content),
+            "post_content_sha256" => hash("sha256", (string) $content),
             "raw" => $post,
         ];
     }
@@ -127,37 +150,31 @@ trait HandlesWordPressRestAndToolkit
 
     private function decodeMarkedPayload(string $stdout, string $marker): array|null
     {
-        foreach (preg_split("/\r?\n/", $stdout) ?: [] as $line) {
-            $line = trim($line);
-            if ($line === "" || !str_contains($line, $marker)) {
-                continue;
-            }
-
-            $json = substr($line, strpos($line, $marker) + strlen($marker));
-            $decoded = json_decode(trim($json), true);
-            if (is_array($decoded)) {
-                return $decoded;
-            }
-        }
-
-        return null;
+        return (new \hexa_package_wordpress\Services\WordPressEvalPayloadDecoder())->decode($stdout, $marker);
     }
 
-    private function createToolkitPost(array $target, array $payload): array
+    private function legacyCreateToolkitPost(array $target, array $payload): array
     {
         $php = <<<'PHP'
 $payload = __PAYLOAD__ ;
+$requestedExcerpt = array_key_exists("excerpt", $payload) && $payload["excerpt"] !== null
+    ? (string) $payload["excerpt"]
+    : null;
+$requestedStatus = (string) (($payload["status"] ?? "draft") ?: "draft");
 $post = [
     "post_title" => (string) ($payload["title"] ?? ""),
     "post_content" => (string) ($payload["content"] ?? ""),
-    "post_status" => (string) (($payload["status"] ?? "draft") ?: "draft"),
+    "post_status" => $requestedExcerpt !== null ? "draft" : $requestedStatus,
     "post_type" => (string) (($payload["post_type"] ?? "post") ?: "post"),
 ];
-if (array_key_exists("excerpt", $payload) && $payload["excerpt"] !== null) {
-    $post["post_excerpt"] = (string) $payload["excerpt"];
+if ($requestedExcerpt !== null) {
+    $post["post_excerpt"] = $requestedExcerpt;
 }
 if (!empty($payload["date"])) {
     $post["post_date"] = (string) $payload["date"];
+}
+if (!empty($payload["slug"])) {
+    $post["post_name"] = sanitize_title((string) $payload["slug"]);
 }
 $author = $payload["author"] ?? null;
 if ($author !== null && $author !== "") {
@@ -173,6 +190,28 @@ if ($author !== null && $author !== "") {
 $postId = wp_insert_post($post, true);
 if (is_wp_error($postId)) {
     echo "HEXA_TOOLKIT_CREATE:" . wp_json_encode(["success" => false, "message" => $postId->get_error_message()]);
+    return;
+}
+$createdPost = get_post($postId);
+$storedExcerpt = $createdPost ? (string) $createdPost->post_excerpt : "";
+if (!$createdPost || ($requestedExcerpt !== null && $storedExcerpt !== $requestedExcerpt)) {
+    if ($createdPost && (string) $createdPost->post_status !== "draft") {
+        wp_update_post(["ID" => $postId, "post_status" => "draft"]);
+    }
+    clean_post_cache($postId);
+    $failedPost = get_post($postId);
+    echo "HEXA_TOOLKIT_CREATE:" . wp_json_encode([
+        "success" => false,
+        "message" => "WordPress did not persist the requested excerpt. The post was left as a draft.",
+        "data" => [
+            "post_id" => (int) $postId,
+            "post_url" => (string) (get_permalink($postId) ?: ""),
+            "post_status" => $failedPost ? (string) $failedPost->post_status : "",
+            "post_title" => $failedPost ? (string) $failedPost->post_title : "",
+            "post_excerpt" => $failedPost ? (string) $failedPost->post_excerpt : "",
+            "post_date" => $failedPost ? (string) $failedPost->post_date : "",
+        ],
+    ]);
     return;
 }
 if (!empty($payload["categories"])) {
@@ -194,14 +233,67 @@ foreach ((array) ($payload["taxonomies"] ?? []) as $taxonomy => $termIds) {
 if (!empty($payload["featured_media"])) {
     update_post_meta($postId, "_thumbnail_id", (int) $payload["featured_media"]);
 }
+if ($requestedExcerpt !== null && $requestedStatus !== "draft") {
+    $statusUpdate = ["ID" => $postId, "post_status" => $requestedStatus];
+    if (!empty($payload["date"])) {
+        $statusUpdate["post_date"] = (string) $payload["date"];
+    }
+    $statusResult = wp_update_post($statusUpdate, true);
+    if (is_wp_error($statusResult)) {
+        wp_update_post(["ID" => $postId, "post_status" => "draft"]);
+        clean_post_cache($postId);
+        $failedPost = get_post($postId);
+        echo "HEXA_TOOLKIT_CREATE:" . wp_json_encode([
+            "success" => false,
+            "message" => "The excerpt was saved, but WordPress rejected the requested post status: " . $statusResult->get_error_message(),
+            "data" => [
+                "post_id" => (int) $postId,
+                "post_url" => (string) (get_permalink($postId) ?: ""),
+                "post_status" => $failedPost ? (string) $failedPost->post_status : "",
+                "post_title" => $failedPost ? (string) $failedPost->post_title : "",
+                "post_excerpt" => $failedPost ? (string) $failedPost->post_excerpt : "",
+                "post_date" => $failedPost ? (string) $failedPost->post_date : "",
+            ],
+        ]);
+        return;
+    }
+}
+$finalPost = get_post($postId);
+$finalExcerpt = $finalPost ? (string) $finalPost->post_excerpt : "";
+$finalStatus = $finalPost ? (string) $finalPost->post_status : "";
+$excerptMismatch = $requestedExcerpt !== null && $finalExcerpt !== $requestedExcerpt;
+$statusMismatch = $finalPost && $finalStatus !== $requestedStatus;
+if (!$finalPost || $excerptMismatch || $statusMismatch) {
+    if ($finalPost) {
+        wp_update_post(["ID" => $postId, "post_status" => "draft"]);
+    }
+    clean_post_cache($postId);
+    $failedPost = get_post($postId);
+    echo "HEXA_TOOLKIT_CREATE:" . wp_json_encode([
+        "success" => false,
+        "message" => $statusMismatch
+            ? "WordPress did not retain the requested post status. The post was reverted to draft."
+            : "WordPress changed the requested excerpt while finalizing the post. The post was reverted to draft.",
+        "data" => [
+            "post_id" => (int) $postId,
+            "post_url" => (string) (get_permalink($postId) ?: ""),
+            "post_status" => $failedPost ? (string) $failedPost->post_status : "",
+            "post_title" => $failedPost ? (string) $failedPost->post_title : "",
+            "post_excerpt" => $failedPost ? (string) $failedPost->post_excerpt : "",
+            "post_date" => $failedPost ? (string) $failedPost->post_date : "",
+        ],
+    ]);
+    return;
+}
 echo "HEXA_TOOLKIT_CREATE:" . wp_json_encode([
     "success" => true,
     "data" => [
         "post_id" => (int) $postId,
         "post_url" => (string) (get_permalink($postId) ?: ""),
-        "post_status" => (string) get_post_status($postId),
-        "post_title" => (string) get_the_title($postId),
-        "post_date" => (string) get_post_field("post_date", $postId),
+        "post_status" => (string) $finalPost->post_status,
+        "post_title" => (string) $finalPost->post_title,
+        "post_excerpt" => (string) $finalPost->post_excerpt,
+        "post_date" => (string) $finalPost->post_date,
     ],
 ]);
 PHP;
@@ -211,8 +303,15 @@ PHP;
             return ["success" => false, "message" => (string) ($result["message"] ?? "WP Toolkit post create failed."), "data" => null];
         }
         $parsed = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_TOOLKIT_CREATE:");
-        if (!is_array($parsed) || !($parsed["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($parsed["message"] ?? "Failed to parse WP Toolkit post create output."), "data" => null];
+        if (!is_array($parsed)) {
+            return ["success" => false, "message" => "Failed to parse WP Toolkit post create output.", "data" => null];
+        }
+        if (!($parsed["success"] ?? false)) {
+            return [
+                "success" => false,
+                "message" => (string) ($parsed["message"] ?? "WP Toolkit post create failed."),
+                "data" => is_array($parsed["data"] ?? null) ? $parsed["data"] : null,
+            ];
         }
         return ["success" => true, "message" => "Post created via WP Toolkit.", "data" => is_array($parsed["data"] ?? null) ? $parsed["data"] : null];
     }

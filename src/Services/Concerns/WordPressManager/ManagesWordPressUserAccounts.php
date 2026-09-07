@@ -297,7 +297,6 @@ trait ManagesWordPressUserAccounts
             $php = <<<'PHP'
 $postIds = __POST_IDS__;
 $posts = [];
-$imageSizes = array_values(array_unique(array_merge(["full", "large", "medium", "medium_large", "thumbnail"], get_intermediate_image_sizes())));
 foreach ((array) $postIds as $rawPostId) {
     $postId = (int) $rawPostId;
     if ($postId <= 0) {
@@ -309,6 +308,11 @@ foreach ((array) $postIds as $rawPostId) {
     }
     $author = get_userdata((int) $post->post_author);
     $featuredId = (int) get_post_thumbnail_id($postId);
+    $attachmentMetadata = $featuredId > 0 ? get_post_meta($featuredId, "_wp_attachment_metadata", true) : [];
+    $availableImageSizes = is_array($attachmentMetadata) && is_array($attachmentMetadata["sizes"] ?? null)
+        ? array_keys($attachmentMetadata["sizes"])
+        : [];
+    $imageSizes = array_values(array_unique(array_merge(["full"], $availableImageSizes)));
     $meta = get_post_meta($postId);
     $flatMeta = [];
     foreach ((array) $meta as $key => $value) {
@@ -317,7 +321,11 @@ foreach ((array) $postIds as $rawPostId) {
     $sizes = [];
     if ($featuredId > 0) {
         foreach ($imageSizes as $size) {
-            $src = wp_get_attachment_image_src($featuredId, $size);
+            try {
+                $src = wp_get_attachment_image_src($featuredId, $size);
+            } catch (\Throwable $e) {
+                continue;
+            }
             if (is_array($src) && !empty($src[0])) {
                 $sizes[(string) $size] = [
                     "url" => (string) $src[0],
@@ -357,10 +365,10 @@ echo "HEXA_POST_DETAILS:" . wp_json_encode([
 PHP;
             $php = str_replace("__POST_IDS__", var_export($postIds, true), $php);
             $result = $this->evaluatePhp($target, $php);
-            if (!($result["success"] ?? false)) {
+            $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_POST_DETAILS:");
+            if (!is_array($payload) && !($result["success"] ?? false)) {
                 return ["success" => false, "message" => (string) ($result["message"] ?? "Post detail lookup failed."), "posts" => []];
             }
-            $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_POST_DETAILS:");
             if (!is_array($payload) || !($payload["success"] ?? false)) {
                 return ["success" => false, "message" => "Failed to parse WP Toolkit post detail output.", "posts" => []];
             }
@@ -394,6 +402,67 @@ PHP;
             ];
         }
         return ["success" => true, "message" => count($posts) . " post detail row(s) loaded via REST.", "posts" => $posts];
+    }
+
+    /**
+     * Read only post metadata without invoking attachment, image-size, permalink,
+     * editor, or filesystem filters. Integrity checks must remain independent of
+     * optional media plugins and WordPress filesystem credential state.
+     */
+    public function getPostMetaByIds(array $target, array $postIds): array
+    {
+        $target = $this->normalizeTarget($target);
+        $postIds = array_values(array_unique(array_filter(array_map('intval', $postIds))));
+        if ($postIds === []) {
+            return ['success' => true, 'message' => 'No post IDs requested.', 'posts' => []];
+        }
+
+        if ($this->usesWpToolkit($target)) {
+            $php = <<<'PHP'
+$postIds = __POST_IDS__;
+$posts = [];
+foreach ((array) $postIds as $rawPostId) {
+    $postId = (int) $rawPostId;
+    if ($postId <= 0 || !get_post($postId)) {
+        continue;
+    }
+    $flatMeta = [];
+    foreach ((array) get_post_meta($postId) as $key => $values) {
+        $flatMeta[(string) $key] = is_array($values) && count($values) === 1 ? $values[0] : $values;
+    }
+    $posts[$postId] = ["id" => $postId, "post_id" => $postId, "meta" => $flatMeta];
+}
+echo "HEXA_POST_META_DETAILS:" . wp_json_encode(["success" => true, "posts" => $posts]);
+PHP;
+            $result = $this->evaluatePhp($target, str_replace('__POST_IDS__', var_export($postIds, true), $php));
+            $payload = $this->decodeMarkedPayload((string) ($result['stdout'] ?? ''), 'HEXA_POST_META_DETAILS:');
+            if (!is_array($payload)) {
+                return [
+                    'success' => false,
+                    'message' => !($result['success'] ?? false)
+                        ? (string) ($result['message'] ?? 'Post metadata lookup failed.')
+                        : 'Failed to parse WordPress post metadata output.',
+                    'posts' => [],
+                ];
+            }
+
+            return [
+                'success' => (bool) ($payload['success'] ?? false),
+                'message' => count((array) ($payload['posts'] ?? [])) . ' post metadata row(s) loaded via WP Toolkit.',
+                'posts' => is_array($payload['posts'] ?? null) ? $payload['posts'] : [],
+            ];
+        }
+
+        $posts = [];
+        foreach ($postIds as $postId) {
+            $response = $this->restRequest($target, 'get', 'posts/'.$postId, [], ['context' => 'edit']);
+            if (!($response['success'] ?? false) || !is_array($response['data'] ?? null)) {
+                continue;
+            }
+            $posts[$postId] = ['id' => $postId, 'post_id' => $postId, 'meta' => (array) ($response['data']['meta'] ?? [])];
+        }
+
+        return ['success' => true, 'message' => count($posts).' post metadata row(s) loaded via REST.', 'posts' => $posts];
     }
 
     public function getUserRole(array $target, int $userId): array
@@ -575,7 +644,7 @@ PHP;
             $php = '$meta = ' . var_export($meta, true) . '; foreach ($meta as $key => $value) { update_post_meta(' . $postId . ', (string) $key, $value); } echo "HEXA_POST_META_OK";';
             $result = $this->evaluatePhp($target, $php);
             $stdout = trim((string) ($result["stdout"] ?? ""));
-            if (!($result["success"] ?? false) || !str_contains($stdout, "HEXA_POST_META_OK")) {
+            if (!str_contains($stdout, "HEXA_POST_META_OK")) {
                 return ["success" => false, "message" => trim($stdout) !== "" ? trim($stdout) : ((string) ($result["message"] ?? "Post meta update failed."))];
             }
 
