@@ -24,7 +24,7 @@ final class OutboundHttpSecurityTest extends TestCase
 
         $this->app->instance(OutboundUrlGuard::class, new OutboundUrlGuard(
             static fn (string $host): array => match ($host) {
-                'public.example', 'wordpress.example', 'images.example', 'en.wikipedia.org' => ['93.184.216.34'],
+                'public.example.org', 'wordpress.example.org', 'images.example.org', 'en.wikipedia.org' => ['93.184.216.34'],
                 default => [],
             },
         ));
@@ -54,7 +54,7 @@ final class OutboundHttpSecurityTest extends TestCase
         });
 
         $response = (new WordPressController)->articleMetadata(Request::create('/', 'POST', [
-            'url' => 'https://public.example/article',
+            'url' => 'https://public.example.org/article',
         ]));
 
         $this->assertTrue($response->getData(true)['items'][0]['success']);
@@ -90,22 +90,22 @@ final class OutboundHttpSecurityTest extends TestCase
         Http::fake(function (ClientRequest $request, array $requestOptions) use (&$options) {
             $options[$request->url()] = $requestOptions;
 
-            if ($request->url() === 'https://images.example/photo.png') {
+            if ($request->url() === 'https://images.example.org/photo.png') {
                 return Factory::response('image-bytes', 200, ['Content-Type' => 'image/png']);
             }
 
             return Factory::response([
                 'id' => 77,
-                'source_url' => 'https://wordpress.example/uploads/photo.png',
+                'source_url' => 'https://wordpress.example.org/uploads/photo.png',
                 'title' => ['rendered' => 'Photo'],
             ], 201);
         });
 
         $result = app(WordPressService::class)->uploadMedia(
-            'https://wordpress.example',
+            'https://wordpress.example.org',
             'editor',
             'app-password',
-            'https://images.example/photo.png',
+            'https://images.example.org/photo.png',
         );
 
         $this->assertTrue($result['success']);
@@ -138,9 +138,9 @@ final class OutboundHttpSecurityTest extends TestCase
         });
 
         $method = new ReflectionMethod(WordPressManagerService::class, 'discoverSiteIconFallback');
-        $result = $method->invoke(app(WordPressManagerService::class), 'https://wordpress.example');
+        $result = $method->invoke(app(WordPressManagerService::class), 'https://wordpress.example.org');
 
-        $this->assertSame('https://wordpress.example/icon.png', $result['url']);
+        $this->assertSame('https://wordpress.example.org/icon.png', $result['url']);
         $this->assertSecureOptions($options);
     }
 
