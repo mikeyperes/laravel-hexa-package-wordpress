@@ -2,6 +2,7 @@
 
 namespace hexa_package_wordpress\Acf;
 
+use hexa_core\Security\Http\OutboundUrlGuard;
 use Illuminate\Support\Facades\Http;
 
 class AcfEducationMetadataService
@@ -37,12 +38,18 @@ class AcfEducationMetadataService
         try {
             $variants = $this->nameVariants($name);
             $candidateTitles = [];
+            $guard = app(OutboundUrlGuard::class);
+            $wikipediaApiUrl = $guard->assertSafe('https://en.wikipedia.org/w/api.php');
+            $requestOptions = [
+                'verify' => true,
+                'allow_redirects' => $guard->redirectOptions(),
+            ];
 
             foreach ($variants as $variant) {
-                $direct = Http::withoutVerifying()
+                $direct = Http::withOptions($requestOptions)
                     ->timeout(12)
                     ->withHeaders(['User-Agent' => 'Hexa WordPress ACF Education Metadata Fetcher/1.0'])
-                    ->get('https://en.wikipedia.org/w/api.php', [
+                    ->get($wikipediaApiUrl, [
                         'action' => 'query',
                         'titles' => $variant,
                         'redirects' => 1,
@@ -50,7 +57,7 @@ class AcfEducationMetadataService
                         'utf8' => 1,
                     ]);
 
-                if (!$direct->successful()) {
+                if (! $direct->successful()) {
                     continue;
                 }
 
@@ -66,7 +73,7 @@ class AcfEducationMetadataService
                 }
 
                 $pages = $direct->json('query.pages', []);
-                if (!is_array($pages)) {
+                if (! is_array($pages)) {
                     continue;
                 }
 
@@ -77,33 +84,33 @@ class AcfEducationMetadataService
                     if ($title !== '') {
                         $candidateTitles[$title] = true;
                     }
-                    if (!$missing && $title !== '' && ($this->titleMatchesAny($variants, $title) || !empty($acceptedRedirectTargets[$titleKey]))) {
+                    if (! $missing && $title !== '' && ($this->titleMatchesAny($variants, $title) || ! empty($acceptedRedirectTargets[$titleKey]))) {
                         return [
                             'name' => $name,
                             'success' => true,
                             'wiki_url' => $this->wikipediaUrlForTitle($title),
                             'title' => $title,
-                            'message' => !empty($acceptedRedirectTargets[$titleKey]) ? 'Wikipedia page matched by live redirect.' : 'Wikipedia page matched by live page lookup using "' . $variant . '".',
+                            'message' => ! empty($acceptedRedirectTargets[$titleKey]) ? 'Wikipedia page matched by live redirect.' : 'Wikipedia page matched by live page lookup using "'.$variant.'".',
                         ];
                     }
                 }
             }
 
             foreach ($variants as $variant) {
-                $response = Http::withoutVerifying()
+                $response = Http::withOptions($requestOptions)
                     ->timeout(12)
                     ->withHeaders(['User-Agent' => 'Hexa WordPress ACF Education Metadata Fetcher/1.0'])
-                    ->get('https://en.wikipedia.org/w/api.php', [
+                    ->get($wikipediaApiUrl, [
                         'action' => 'query',
                         'list' => 'search',
-                        'srsearch' => '"' . $variant . '"',
+                        'srsearch' => '"'.$variant.'"',
                         'srlimit' => 8,
                         'format' => 'json',
                         'utf8' => 1,
                     ]);
 
-                if (!$response->successful()) {
-                    return ['name' => $name, 'success' => false, 'wiki_url' => '', 'title' => '', 'message' => 'Wikipedia search failed: HTTP ' . $response->status(), 'searched' => $variants];
+                if (! $response->successful()) {
+                    return ['name' => $name, 'success' => false, 'wiki_url' => '', 'title' => '', 'message' => 'Wikipedia search failed: HTTP '.$response->status(), 'searched' => $variants];
                 }
 
                 $search = $response->json('query.search', []);
@@ -113,7 +120,7 @@ class AcfEducationMetadataService
                     if ($title !== '') {
                         $candidateTitles[$title] = true;
                     }
-                    if ($title === '' || !$this->titleMatchesAny($variants, $title)) {
+                    if ($title === '' || ! $this->titleMatchesAny($variants, $title)) {
                         continue;
                     }
 
@@ -122,7 +129,7 @@ class AcfEducationMetadataService
                         'success' => true,
                         'wiki_url' => $this->wikipediaUrlForTitle($title),
                         'title' => $title,
-                        'message' => 'Wikipedia page matched by live search using "' . $variant . '".',
+                        'message' => 'Wikipedia page matched by live search using "'.$variant.'".',
                         'searched' => $variants,
                     ];
                 }
@@ -133,12 +140,12 @@ class AcfEducationMetadataService
                 'success' => false,
                 'wiki_url' => '',
                 'title' => '',
-                'message' => 'No exact Wikipedia page match found. Searched: ' . implode(', ', $variants) . '. Candidates: ' . (count($candidateTitles) ? implode(', ', array_slice(array_keys($candidateTitles), 0, 6)) : 'none') . '.',
+                'message' => 'No exact Wikipedia page match found. Searched: '.implode(', ', $variants).'. Candidates: '.(count($candidateTitles) ? implode(', ', array_slice(array_keys($candidateTitles), 0, 6)) : 'none').'.',
                 'searched' => $variants,
                 'candidates' => array_slice(array_keys($candidateTitles), 0, 12),
             ];
         } catch (\Throwable $e) {
-            return ['name' => $name, 'success' => false, 'wiki_url' => '', 'title' => '', 'message' => 'Wikipedia search failed: ' . $e->getMessage()];
+            return ['name' => $name, 'success' => false, 'wiki_url' => '', 'title' => '', 'message' => 'Wikipedia search failed: '.$e->getMessage()];
         }
     }
 
@@ -146,6 +153,7 @@ class AcfEducationMetadataService
     {
         $nameKey = $this->lookupKey($name);
         $titleKey = $this->lookupKey($title);
+
         return $nameKey !== '' && $nameKey === $titleKey;
     }
 
@@ -156,6 +164,7 @@ class AcfEducationMetadataService
                 return true;
             }
         }
+
         return false;
     }
 
@@ -177,7 +186,7 @@ class AcfEducationMetadataService
 
     protected function wikipediaUrlForTitle(string $title): string
     {
-        return 'https://en.wikipedia.org/wiki/' . str_replace('%2F', '/', rawurlencode(str_replace(' ', '_', trim($title))));
+        return 'https://en.wikipedia.org/wiki/'.str_replace('%2F', '/', rawurlencode(str_replace(' ', '_', trim($title))));
     }
 
     protected function lookupKey(string $value): string
@@ -188,6 +197,7 @@ class AcfEducationMetadataService
         $value = preg_replace('/\s*(?:\+|&)\s*/', ' and ', $value);
         $value = preg_replace('/\b(the|school|of|and|at)\b/', ' ', $value);
         $value = preg_replace('/[^a-z0-9]+/', ' ', $value);
+
         return trim((string) preg_replace('/\s+/', ' ', $value));
     }
 }

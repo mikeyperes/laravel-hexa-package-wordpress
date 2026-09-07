@@ -2,11 +2,14 @@
 
 namespace hexa_package_wordpress\Http\Controllers;
 
-use Illuminate\Http\Request;
-use Illuminate\Routing\Controller;
-use Illuminate\Http\JsonResponse;
+use hexa_core\Security\Http\OutboundUrlGuard;
 use hexa_package_wordpress\Acf\AcfEducationMetadataService;
 use hexa_package_wordpress\Services\WordPressService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\Http;
+use Illuminate\View\View;
 
 /**
  * WordPressController — handles raw dev view and API test endpoints.
@@ -16,7 +19,7 @@ class WordPressController extends Controller
     /**
      * Show the raw development/test page.
      *
-     * @return \Illuminate\View\View
+     * @return View
      */
     public function raw()
     {
@@ -26,8 +29,7 @@ class WordPressController extends Controller
     /**
      * Test connection to a WordPress site.
      *
-     * @param Request $request
-     * @return \Illuminate\Http\JsonResponse
+     * @return JsonResponse
      */
     public function testConnection(Request $request)
     {
@@ -50,8 +52,7 @@ class WordPressController extends Controller
     /**
      * Get categories from a WordPress site.
      *
-     * @param Request $request
-     * @return \Illuminate\Http\JsonResponse
+     * @return JsonResponse
      */
     public function categories(Request $request)
     {
@@ -74,8 +75,7 @@ class WordPressController extends Controller
     /**
      * Get tags from a WordPress site.
      *
-     * @param Request $request
-     * @return \Illuminate\Http\JsonResponse
+     * @return JsonResponse
      */
     public function tags(Request $request)
     {
@@ -111,7 +111,7 @@ class WordPressController extends Controller
     {
         $urls = $request->input('urls', []);
         $singleUrl = trim((string) $request->input('url', ''));
-        if (!is_array($urls)) {
+        if (! is_array($urls)) {
             $urls = [];
         }
         if ($singleUrl !== '') {
@@ -126,7 +126,7 @@ class WordPressController extends Controller
             ->take(20)
             ->all();
 
-        if (!$urls) {
+        if (! $urls) {
             return response()->json(['success' => false, 'message' => 'No article URLs provided.', 'items' => []], 422);
         }
 
@@ -147,12 +147,18 @@ class WordPressController extends Controller
         $url = trim($url);
         $host = strtolower((string) parse_url($url, PHP_URL_HOST));
         $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
-        if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+        if (! in_array($scheme, ['http', 'https'], true) || $host === '') {
             return ['url' => $url, 'success' => false, 'title' => '', 'source' => $host, 'message' => 'Invalid article URL.'];
         }
 
         try {
-            $response = \Illuminate\Support\Facades\Http::withoutVerifying()
+            $guard = app(OutboundUrlGuard::class);
+            $url = $guard->assertSafe($url);
+
+            $response = Http::withOptions([
+                'verify' => true,
+                'allow_redirects' => $guard->redirectOptions(),
+            ])
                 ->timeout(15)
                 ->withHeaders([
                     'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36 HexaSMP/1.0',
@@ -160,11 +166,10 @@ class WordPressController extends Controller
                     'Accept-Language' => 'en-US,en;q=0.9',
                     'Cache-Control' => 'no-cache',
                 ])
-                ->withOptions(['allow_redirects' => ['max' => 5, 'strict' => false, 'referer' => true]])
                 ->get($url);
 
-            if (!$response->successful()) {
-                return ['url' => $url, 'success' => false, 'title' => '', 'source' => preg_replace('/^www\./', '', $host), 'message' => 'Fetch failed: HTTP ' . $response->status()];
+            if (! $response->successful()) {
+                return ['url' => $url, 'success' => false, 'title' => '', 'source' => preg_replace('/^www\./', '', $host), 'message' => 'Fetch failed: HTTP '.$response->status()];
             }
 
             $title = $this->extractArticleTitleFromHtml((string) $response->body());
@@ -174,7 +179,7 @@ class WordPressController extends Controller
 
             return ['url' => $url, 'success' => true, 'title' => $title, 'source' => preg_replace('/^www\./', '', $host), 'message' => 'Title metadata fetched.'];
         } catch (\Throwable $e) {
-            return ['url' => $url, 'success' => false, 'title' => '', 'source' => preg_replace('/^www\./', '', $host), 'message' => 'Fetch failed: ' . $e->getMessage()];
+            return ['url' => $url, 'success' => false, 'title' => '', 'source' => preg_replace('/^www\./', '', $host), 'message' => 'Fetch failed: '.$e->getMessage()];
         }
     }
 
@@ -216,12 +221,13 @@ class WordPressController extends Controller
     protected function htmlAttributeValue(string $tag, string $attribute): string
     {
         $attribute = preg_quote($attribute, '/');
-        if (preg_match('/\b' . $attribute . '\s*=\s*(["\'])(.*?)\1/is', $tag, $match)) {
+        if (preg_match('/\b'.$attribute.'\s*=\s*(["\'])(.*?)\1/is', $tag, $match)) {
             return html_entity_decode(trim((string) $match[2]), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         }
-        if (preg_match('/\b' . $attribute . '\s*=\s*([^\s>]+)/is', $tag, $match)) {
+        if (preg_match('/\b'.$attribute.'\s*=\s*([^\s>]+)/is', $tag, $match)) {
             return html_entity_decode(trim((string) $match[1], "\"' \t\n\r\0\x0B"), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         }
+
         return '';
     }
 
@@ -229,14 +235,14 @@ class WordPressController extends Controller
     {
         $value = html_entity_decode(strip_tags($value), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $value = preg_replace('/\s+/u', ' ', $value);
+
         return trim((string) $value);
     }
 
     /**
      * Create a post on a WordPress site.
      *
-     * @param Request $request
-     * @return \Illuminate\Http\JsonResponse
+     * @return JsonResponse
      */
     public function createPost(Request $request)
     {

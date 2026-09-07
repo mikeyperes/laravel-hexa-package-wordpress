@@ -2,6 +2,7 @@
 
 namespace hexa_package_wordpress\Services\Concerns\WordPressManager;
 
+use hexa_core\Security\Http\OutboundUrlGuard;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -10,6 +11,15 @@ trait ManagesWordPressMedia
     public function uploadMedia(array $target, string $filePath, string $fileName = '', string $altText = '', string $caption = '', string $description = ''): array
     {
         $target = $this->normalizeTarget($target);
+        $filePath = trim($filePath);
+        if (filter_var($filePath, FILTER_VALIDATE_URL)) {
+            try {
+                $filePath = app(OutboundUrlGuard::class)->assertSafe($filePath);
+            } catch (\Throwable $e) {
+                return ['success' => false, 'message' => 'Remote media URL is not allowed: '.$e->getMessage()];
+            }
+        }
+
         if ($this->usesWpToolkit($target)) {
             $normalizedPath = trim($filePath);
             if ($normalizedPath !== '' && ! filter_var($normalizedPath, FILTER_VALIDATE_URL) && is_file($normalizedPath)) {
@@ -291,7 +301,20 @@ trait ManagesWordPressMedia
         }
 
         try {
-            $response = Http::withoutVerifying()
+            $guard = app(OutboundUrlGuard::class);
+            $siteUrl = $guard->assertSafe($siteUrl);
+            $requestOptions = [
+                'verify' => true,
+                'allow_redirects' => $guard->redirectOptions(),
+            ];
+        } catch (\Throwable $e) {
+            Log::debug('WordPressManagerService::discoverSiteIconFallback rejected unsafe URL', ['url' => $siteUrl, 'error' => $e->getMessage()]);
+
+            return ['url' => '', 'source' => 'none'];
+        }
+
+        try {
+            $response = Http::withOptions($requestOptions)
                 ->timeout(15)
                 ->withHeaders(['User-Agent' => 'Hexa WordPress Manager'])
                 ->get($siteUrl.'/');
@@ -313,7 +336,7 @@ trait ManagesWordPressMedia
 
         $rootIcon = $siteUrl.'/favicon.ico';
         try {
-            $response = Http::withoutVerifying()
+            $response = Http::withOptions($requestOptions)
                 ->timeout(10)
                 ->withHeaders(['User-Agent' => 'Hexa WordPress Manager', 'Range' => 'bytes=0-256'])
                 ->get($rootIcon);
