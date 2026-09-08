@@ -63,8 +63,10 @@ class PackageSmokeTest extends TestCase
         $this->assertStringContainsString("route('hexa-package.asset'", $workspace);
         $this->assertStringContainsString("'asset' => 'post-workspace.css'", $workspace);
         $this->assertStringContainsString("'asset' => 'post-workspace.js'", $workspace);
-        $this->assertSame('2.0.65', (require $root.'/config/wordpress.php')['version']);
-        $this->assertSame('2.0.65', $composer['version'] ?? null);
+        $version = $composer['version'] ?? null;
+        $this->assertIsString($version);
+        $this->assertMatchesRegularExpression('/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/', $version);
+        $this->assertSame($version, (require $root.'/config/wordpress.php')['version']);
     }
 
     public function test_workspace_login_preserves_the_native_first_form_submission(): void
