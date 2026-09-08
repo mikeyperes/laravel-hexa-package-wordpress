@@ -112,6 +112,34 @@ class WordPressSecureTransportTest extends TestCase
         $this->assertNull($requests[0]->body);
     }
 
+    public function test_authenticated_json_explicitly_supports_the_bounded_long_running_contract(): void
+    {
+        $requests = [];
+        $transport = $this->transport(static function (OutboundHttpRequest $request) use (&$requests): OutboundHttpResponse {
+            $requests[] = $request;
+
+            return new OutboundHttpResponse(200, ['content-type' => 'application/json'], '{"success":true}');
+        });
+
+        $response = $transport->authenticatedJson(
+            'POST',
+            'https://wordpress.example.com/wp-json/smp-tts/v1/posts/42/generate',
+            'editor',
+            'application-password',
+            ['shorten' => true],
+            timeoutSeconds: 260,
+        );
+
+        $this->assertTrue($response->successful());
+        $this->assertCount(1, $requests);
+        $this->assertSame(260, $requests[0]->timeoutSeconds);
+        $this->assertGreaterThanOrEqual(259000, $requests[0]->curlOptions()[CURLOPT_TIMEOUT_MS]);
+        $this->assertLessThanOrEqual(260000, $requests[0]->curlOptions()[CURLOPT_TIMEOUT_MS]);
+        $this->assertSame(['shorten' => true], json_decode((string) $requests[0]->body, true));
+        $this->assertArrayHasKey('Authorization', $requests[0]->headers);
+        $this->assertStringNotContainsString('application-password', $requests[0]->target->url);
+    }
+
     public function test_public_redirects_are_revalidated_and_private_destinations_are_blocked(): void
     {
         $requests = [];

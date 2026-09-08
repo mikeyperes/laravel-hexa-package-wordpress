@@ -71,6 +71,7 @@ final class WordPressHttpTransport
             'headers' => $headers,
             'body' => $encodedBody,
             'timeout' => $timeoutSeconds,
+            'long_running' => $timeoutSeconds > 60,
             'max_bytes' => self::MAX_REST_RESPONSE_BYTES,
             'max_redirects' => 0,
         ]);
