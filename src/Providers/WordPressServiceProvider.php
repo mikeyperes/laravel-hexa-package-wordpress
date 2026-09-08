@@ -14,7 +14,9 @@ use hexa_package_wordpress\Media\WordPressMediaGateway;
 use hexa_package_wordpress\Media\WordPressMediaOperationStore;
 use hexa_package_wordpress\SearchConsole\SiteKitTargetAdapter;
 use hexa_package_wordpress\Services\WordPressManagerService;
+use hexa_package_wordpress\Services\WordPressHttpTransport;
 use hexa_package_wordpress\Services\WordPressLoginUrlService;
+use hexa_package_wordpress\Services\WordPressMediaSourceService;
 use hexa_package_wordpress\Services\WordPressPostSnapshotExtensionRegistry;
 use hexa_package_wordpress\Services\WordPressPostSnapshotService;
 use hexa_package_wordpress\Services\WordPressPluginIntegrityService;
@@ -33,6 +35,8 @@ class WordPressServiceProvider extends ServiceProvider
         $this->app->singleton(AcfEducationMetadataService::class);
         $this->app->singleton(AcfRepeaterNormalizer::class);
         $this->app->singleton(AcfSmartTypeResolver::class);
+        $this->app->singleton(WordPressHttpTransport::class);
+        $this->app->singleton(WordPressMediaSourceService::class);
         $this->app->singleton(WordPressService::class);
         $this->app->singleton(WordPressManagerService::class);
         $this->app->singleton(WordPressLoginUrlService::class);

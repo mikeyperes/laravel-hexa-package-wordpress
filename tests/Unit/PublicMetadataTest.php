@@ -182,6 +182,25 @@ final class PublicMetadataTest extends TestCase
         }
     }
 
+    public function test_favicon_relative_link_uses_the_guarded_redirect_destination(): void
+    {
+        $urls = [];
+        $guard = new OutboundUrlGuard(static fn (): array => ['93.184.216.34']);
+        $this->app->instance(OutboundUrlGuard::class, $guard);
+        $this->app->instance(SafeOutboundHttpClient::class, new SafeOutboundHttpClient($guard, static function (OutboundHttpRequest $request) use (&$urls): OutboundHttpResponse {
+            $urls[] = $request->target->url;
+
+            return count($urls) === 1
+                ? new OutboundHttpResponse(302, ['Location' => 'https://redirect.example.org/blog/'], '')
+                : new OutboundHttpResponse(200, ['Content-Type' => 'text/html'], '<link rel="icon" href="assets/icon.png">');
+        }));
+        $method = new \ReflectionMethod(WordPressManagerService::class, 'discoverSiteIconFallback');
+        $result = $method->invoke(app(WordPressManagerService::class), 'https://public.example.org');
+
+        $this->assertSame(['url' => 'https://redirect.example.org/blog/assets/icon.png', 'source' => 'html_icon_link'], $result);
+        $this->assertSame(['https://public.example.org/', 'https://redirect.example.org/blog/'], $urls);
+    }
+
     public function test_favicon_ignores_private_link_and_non_image_fallback(): void
     {
         $urls = [];

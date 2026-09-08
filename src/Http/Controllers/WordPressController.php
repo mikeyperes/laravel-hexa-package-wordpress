@@ -15,10 +15,19 @@ use Illuminate\View\View;
  */
 class WordPressController extends Controller
 {
+    private readonly ArticleMetadataService $articleMetadata;
+
+    public function __construct(
+        private readonly WordPressService $wordpress,
+        ?ArticleMetadataService $articleMetadata = null,
+    ) {
+        $this->articleMetadata = $articleMetadata ?? app(ArticleMetadataService::class);
+    }
+
     /**
      * Show the raw development/test page.
      *
-     * @return View
+     * @return \Illuminate\View\View
      */
     public function raw()
     {
@@ -28,7 +37,8 @@ class WordPressController extends Controller
     /**
      * Test connection to a WordPress site.
      *
-     * @return JsonResponse
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
      */
     public function testConnection(Request $request)
     {
@@ -38,8 +48,7 @@ class WordPressController extends Controller
             'app_password' => 'required|string',
         ]);
 
-        $service = app(WordPressService::class);
-        $result = $service->testConnection(
+        $result = $this->wordpress->testConnection(
             $request->input('site_url'),
             $request->input('username'),
             $request->input('app_password')
@@ -51,7 +60,8 @@ class WordPressController extends Controller
     /**
      * Get categories from a WordPress site.
      *
-     * @return JsonResponse
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
      */
     public function categories(Request $request)
     {
@@ -61,8 +71,7 @@ class WordPressController extends Controller
             'app_password' => 'required|string',
         ]);
 
-        $service = app(WordPressService::class);
-        $result = $service->getCategories(
+        $result = $this->wordpress->getCategories(
             $request->input('site_url'),
             $request->input('username'),
             $request->input('app_password')
@@ -74,7 +83,8 @@ class WordPressController extends Controller
     /**
      * Get tags from a WordPress site.
      *
-     * @return JsonResponse
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
      */
     public function tags(Request $request)
     {
@@ -84,8 +94,7 @@ class WordPressController extends Controller
             'app_password' => 'required|string',
         ]);
 
-        $service = app(WordPressService::class);
-        $result = $service->getTags(
+        $result = $this->wordpress->getTags(
             $request->input('site_url'),
             $request->input('username'),
             $request->input('app_password')
@@ -117,15 +126,23 @@ class WordPressController extends Controller
         if (trim($payload['url'] ?? '') !== '') {
             array_unshift($urls, $payload['url']);
         }
-        $result = app(ArticleMetadataService::class)->lookupMany($urls);
+
+        $result = $this->articleMetadata->lookupMany($urls);
 
         return response()->json($result, ($result['success'] ?? false) ? 200 : 422);
+    }
+
+    /** Backward-compatible hook retained for package consumers and tests. */
+    protected function fetchArticleMetadataForUrl(string $url): array
+    {
+        return $this->articleMetadata->lookup($url);
     }
 
     /**
      * Create a post on a WordPress site.
      *
-     * @return JsonResponse
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
      */
     public function createPost(Request $request)
     {
@@ -138,8 +155,7 @@ class WordPressController extends Controller
             'status' => 'required|in:draft,publish',
         ]);
 
-        $service = app(WordPressService::class);
-        $result = $service->createPost(
+        $result = $this->wordpress->createPost(
             $request->input('site_url'),
             $request->input('username'),
             $request->input('app_password'),
