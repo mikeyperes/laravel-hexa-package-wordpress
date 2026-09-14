@@ -7,6 +7,55 @@ use PHPUnit\Framework\TestCase;
 
 class WordPressPostCreationTest extends TestCase
 {
+    public function test_kses_expectation_tracks_each_registered_save_filter_without_hiding_corruption(): void
+    {
+        $manager = new FakeWordPressPostCreationManager(['success' => false]);
+        $body = '<p><img alt="A printer\'s print head">Original text.</p>';
+        $manager->updatePost([], 77, ['content' => $body, 'excerpt' => $body]);
+
+        $this->assertSame(1, preg_match('/\$canonicalizeKsesField = static function.*?^\};/ms', $manager->evaluatedPhp, $canonicalizer));
+        $this->assertSame(1, preg_match('/\$compare = static function.*?^\};/ms', $manager->evaluatedPhp, $comparator));
+
+        // Execute the generated closures with isolated WordPress function stubs.
+        // The stub models the attribute entity change that exposed the mismatch.
+        [$canonicalize, $compare] = eval(<<<'PHP'
+namespace Tests\Unit\WordPressKsesVerification;
+if (!function_exists(__NAMESPACE__ . '\\has_filter')) {
+    function has_filter($hook, $callback) {
+        return $GLOBALS['hexa_kses_verification_filters'][$hook][$callback] ?? false;
+    }
+    function wp_kses_post($value) {
+        return str_replace("'", "&apos;", $value);
+    }
+}
+$describe = static fn ($value) => $value;
+PHP
+            . $canonicalizer[0] . $comparator[0] . 'return [$canonicalizeKsesField, $compare];');
+
+        try {
+            foreach ([[false, false], [10, false], [false, 10], [0, 0]] as [$contentPriority, $excerptPriority]) {
+                $GLOBALS['hexa_kses_verification_filters'] = [
+                    'content_save_pre' => ['wp_filter_post_kses' => $contentPriority],
+                    'excerpt_save_pre' => ['wp_filter_post_kses' => $excerptPriority],
+                ];
+
+                foreach (['content' => $contentPriority, 'excerpt' => $excerptPriority] as $field => $priority) {
+                    $expected = $priority === false ? $body : str_replace("'", '&apos;', $body);
+                    $actual = $canonicalize($field, $body);
+                    $this->assertSame($expected, $actual);
+                    $coreField = 'post_' . $field;
+                    $this->assertSame([], $compare([$coreField => $expected], [$coreField => $actual], [$coreField], [], false));
+                    $changed = str_replace('Original text.', 'Changed text.', $actual);
+                    $this->assertArrayHasKey($coreField, $compare([$coreField => $expected], [$coreField => $changed], [$coreField], [], false));
+                }
+
+                $this->assertSame($body, $canonicalize('title', $body));
+            }
+        } finally {
+            unset($GLOBALS['hexa_kses_verification_filters']);
+        }
+    }
+
     public function test_toolkit_create_stages_and_verifies_every_supplied_field(): void
     {
         $excerpt = 'A unique excerpt with "quotes", an apostrophe, and exact punctuation.';

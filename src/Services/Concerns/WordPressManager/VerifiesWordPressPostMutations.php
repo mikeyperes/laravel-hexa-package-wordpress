@@ -41,12 +41,16 @@ $describe = static function ($value) {
     return $value;
 };
 $canonicalizeKsesField = static function (string $field, string $value): string {
-    // WordPress applies the post KSES allow-list before persisting content and
-    // excerpts. Compare against that canonical database representation so
-    // harmless entity normalization (for example ' to &apos; in attributes)
-    // is not mistaken for content corruption. Every other transformation still
-    // fails the exact readback below.
-    return in_array($field, ["content", "excerpt"], true)
+    // Toolkit contexts do not always register the post KSES save filters.
+    // Only expect KSES normalization when the matching save hook applies it;
+    // capability checks alone do not describe the active filters.
+    $saveHook = match ($field) {
+        "content" => "content_save_pre",
+        "excerpt" => "excerpt_save_pre",
+        default => null,
+    };
+
+    return $saveHook !== null && has_filter($saveHook, "wp_filter_post_kses") !== false
         ? wp_kses_post($value)
         : $value;
 };
