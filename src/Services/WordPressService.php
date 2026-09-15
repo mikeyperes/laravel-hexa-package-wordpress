@@ -236,6 +236,24 @@ class WordPressService
         array $query = [],
         int $timeoutSeconds = 30,
     ): array {
+        return $this->requestRoute($siteUrl, $username, $appPassword, $method, 'wp/v2/'.ltrim($endpoint, '/'), $body, $query, $timeoutSeconds);
+    }
+
+    /** Execute one authenticated request in a plugin or core REST namespace. */
+    public function requestRoute(
+        string $siteUrl,
+        string $username,
+        string $appPassword,
+        string $method,
+        string $endpoint,
+        array $body = [],
+        array $query = [],
+        int $timeoutSeconds = 30,
+    ): array {
+        if (! preg_match('#^/?[A-Za-z0-9_-]+/v[0-9]+/[A-Za-z0-9_/%:.-]+$#D', $endpoint)
+            || preg_match('~[\\x00-\\x20\\x7f\\\\\\\\?#]|(?:^|/)\\.\\.(?:/|$)~', rawurldecode($endpoint))) {
+            return ['success' => false, 'message' => 'Invalid WordPress REST route.', 'data' => null, 'status' => 400];
+        }
         if (trim($siteUrl) === '' || trim($username) === '' || $appPassword === '') {
             return ['success' => false, 'message' => 'REST credentials are incomplete.', 'data' => null, 'status' => null];
         }
@@ -243,7 +261,7 @@ class WordPressService
         try {
             $response = $this->http->authenticatedJson(
                 $method,
-                $this->endpoint($siteUrl, $endpoint),
+                rtrim($siteUrl, '/').'/wp-json/'.ltrim($endpoint, '/'),
                 $username,
                 $appPassword,
                 $body,

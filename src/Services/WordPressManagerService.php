@@ -4,6 +4,7 @@ namespace hexa_package_wordpress\Services;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\HandlesWordPressRestAndToolkit;
+use hexa_package_wordpress\Services\Concerns\WordPressManager\ExecutesWordPressRestRoutes;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressAcf;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressAvatars;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressMedia;
@@ -18,6 +19,7 @@ use Illuminate\Support\Facades\Cache;
 class WordPressManagerService
 {
     use HandlesWordPressRestAndToolkit;
+    use ExecutesWordPressRestRoutes;
     use ManagesWordPressAcf;
     use ManagesWordPressAvatars;
     use ManagesWordPressMedia;
