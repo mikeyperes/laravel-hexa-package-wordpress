@@ -40,7 +40,7 @@ $describe = static function ($value) {
     }
     return $value;
 };
-$canonicalizeKsesField = static function (string $field, string $value): string {
+$canonicalizeKsesField = static function (string $field, string $value, array $postContext = []): string {
     // Toolkit contexts do not always register the post KSES save filters.
     // Only expect KSES normalization when the matching save hook applies it;
     // capability checks alone do not describe the active filters.
@@ -49,10 +49,34 @@ $canonicalizeKsesField = static function (string $field, string $value): string 
         "excerpt" => "excerpt_save_pre",
         default => null,
     };
+    if ($saveHook !== null && has_filter($saveHook, "wp_filter_post_kses") !== false) {
+        $value = wp_kses_post($value);
+    }
+    if ($field !== "content") {
+        return $value;
+    }
 
-    return $saveHook !== null && has_filter($saveHook, "wp_filter_post_kses") !== false
-        ? wp_kses_post($value)
-        : $value;
+    // CRITICAL — see laravel-hexa-app-publish BUGLOG.md CAMPAIGN-BUG-013. SMP Publication
+    // Integration's Post Hygiene rewrites post_content on wp_insert_post_data with wp_kses
+    // (WordPress 7.1 stores attribute quotes as &apos;). Expect that exact rewrite instead of
+    // rejecting the delivery; no other wp_insert_post_data callback is run here.
+    global $wp_filter;
+    foreach ((array) ($wp_filter["wp_insert_post_data"]->callbacks ?? []) as $callbacks) {
+        foreach ($callbacks as $callback) {
+            $function = $callback["function"] ?? null;
+            if (is_array($function) && is_object($function[0])
+                && get_class($function[0]) === "smp_publication_integration\\Content\\PostHygiene"
+                && $function[1] === "sanitize_post_data") {
+                $data = $function[0]->sanitize_post_data(
+                    ["post_content" => $value, "post_type" => (string) ($postContext["post_type"] ?? "post")],
+                    ["ID" => (int) ($postContext["ID"] ?? 0)]
+                );
+                $value = (string) ($data["post_content"] ?? $value);
+            }
+        }
+    }
+
+    return $value;
 };
 $canonicalizePostDate = static function (string $value): string {
     $value = trim($value);
@@ -513,7 +537,7 @@ foreach ($fieldMap as $source => $destination) {
     }
     $stageExpected[$destination] = $source === "slug"
         ? sanitize_title($expectedValue)
-        : $canonicalizeKsesField($source, $expectedValue);
+        : $canonicalizeKsesField($source, $expectedValue, ["post_type" => $requestedPostType, "ID" => $isCreate ? 0 : $postId]);
     if (!in_array($destination, $stageCoreFields, true)) {
         $stageCoreFields[] = $destination;
     }
