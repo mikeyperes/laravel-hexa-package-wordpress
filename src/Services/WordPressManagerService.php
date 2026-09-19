@@ -15,6 +15,7 @@ use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressUs
 use hexa_package_wordpress\Services\Concerns\WordPressManager\VerifiesWordPressPostMutations;
 use hexa_package_wptoolkit\Services\WpToolkitService;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 
 class WordPressManagerService
 {
@@ -56,8 +57,13 @@ class WordPressManagerService
             $wpPath = rtrim($wpPath, "/");
         }
 
+        $mode = match ($mode) {
+            "wptoolkit", "smp_plugin", "hws_base_tools" => $mode,
+            default => "rest",
+        };
+
         return [
-            "mode" => $mode === "wptoolkit" ? "wptoolkit" : "rest",
+            "mode" => $mode,
             "site_name" => (string) ($target["site_name"] ?? $target["name"] ?? "WordPress site"),
             "url" => rtrim((string) ($target["url"] ?? $target["site_url"] ?? ""), "/"),
             "username" => (string) ($target["username"] ?? $target["wp_username"] ?? ""),
@@ -77,6 +83,11 @@ class WordPressManagerService
         return $target["mode"] === "wptoolkit" && $target["server"] instanceof WhmServer && !empty($target["install_id"]);
     }
 
+    public function usesPluginTransport(array $target): bool
+    {
+        return in_array($this->normalizeTarget($target)["mode"], ["smp_plugin", "hws_base_tools"], true);
+    }
+
     public function connectionMode(array $target): string
     {
         $target = $this->normalizeTarget($target);
@@ -84,7 +95,7 @@ class WordPressManagerService
             return $this->wptoolkit->connectionMode($target["server"]);
         }
 
-        return "rest";
+        return $target["mode"];
     }
 
     public function connectionLabel(array $target): string
@@ -94,7 +105,11 @@ class WordPressManagerService
             return $this->wptoolkit->connectionLabel($target["server"]);
         }
 
-        return "REST API";
+        return match ($target["mode"]) {
+            "smp_plugin" => "SMP Publication Integration API",
+            "hws_base_tools" => "HWS Base Tools API",
+            default => "REST API",
+        };
     }
 
     public function warmConnection(array $target): array
@@ -116,17 +131,17 @@ class WordPressManagerService
         if (($target["url"] ?? "") === "" || ($target["username"] ?? "") === "" || ($target["application_password"] ?? "") === "") {
             return [
                 "success" => false,
-                "message" => "REST credentials are incomplete.",
-                "mode" => "rest",
-                "label" => "REST API",
+                "message" => "WordPress Application Password credentials are incomplete.",
+                "mode" => $target["mode"],
+                "label" => $this->connectionLabel($target),
             ];
         }
 
         return [
             "success" => true,
-            "message" => "REST credentials ready.",
-            "mode" => "rest",
-            "label" => "REST API",
+            "message" => $this->connectionLabel($target)." credentials ready.",
+            "mode" => $target["mode"],
+            "label" => $this->connectionLabel($target),
         ];
     }
 
@@ -217,7 +232,36 @@ class WordPressManagerService
             return $this->wptoolkit->wpCliTestWriteAccess($target["server"], (int) $target["install_id"]);
         }
 
+        if ($this->usesPluginTransport($target)) {
+            $route = $this->pluginPublishingRoute($target);
+            $result = $this->rest->requestRoute($target["url"], $target["username"], $target["application_password"], "get", $route, timeoutSeconds: 15);
+            if (!($result["success"] ?? false)) {
+                return ["success" => false, "message" => (string) ($result["message"] ?? "Plugin publishing connection failed."), "data" => null];
+            }
+            $data = (array) ($result["data"] ?? []);
+            return [
+                "success" => ($data["enabled"] ?? false) === true,
+                "message" => $this->connectionLabel($target)." connected and enabled.",
+                "data" => $data,
+            ];
+        }
+
         return $this->rest->testConnection($target["url"], $target["username"], $target["application_password"]);
+    }
+
+    private function pluginPublishingRoute(array $target, string $suffix = ""): string
+    {
+        $target = $this->normalizeTarget($target);
+        $base = $target["mode"] === "smp_plugin"
+            ? "smpi/v1/external-publishing"
+            : "hws-base-tools/v1/external-publishing";
+
+        return $base.($suffix !== "" ? "/".ltrim($suffix, "/") : "");
+    }
+
+    private function pluginOperationId(): string
+    {
+        return "publish:".(string) Str::uuid();
     }
 
     public function testWriteAccess(array $target): array

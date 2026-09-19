@@ -12,6 +12,24 @@ trait HandlesWordPressRestAndToolkit
     {
         $target = $this->normalizeTarget($target);
 
+        if ($this->usesPluginTransport($target) && preg_match('#^posts(?:/[1-9][0-9]*)?$#D', trim($endpoint, '/'))) {
+            $suffix = trim($endpoint, '/');
+            if (strtoupper($method) !== 'GET') {
+                $body['operation_id'] = $this->pluginOperationId();
+            }
+
+            return $this->rest->requestRoute(
+                $target["url"],
+                $target["username"],
+                $target["application_password"],
+                $method,
+                $this->pluginPublishingRoute($target, $suffix),
+                $body,
+                $query,
+                60,
+            );
+        }
+
         return $this->rest->request(
             $target["url"],
             $target["username"],
