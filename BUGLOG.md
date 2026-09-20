@@ -20,23 +20,27 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 ## CAMPAIGN-BUG-046 — Draft REST updates failed verification after WordPress advanced the post date
 
 - **Severity:** High (external-site drafts could be created but not updated)
-- **Status:** Patched 2026-09-19 23:48 EST in 2.0.71
+- **Status:** Initial preservation attempt in 2.0.71; corrected
+  2026-09-19 23:53 EST in 2.0.72.
 - **Impact:** Both native WordPress REST and the HWS Base Tools bridge created,
   read, and deleted Her Forward drafts successfully, but an update that omitted
   the date failed closed with `REST post verification failed during staging:
   post_date.`
 
-**Root cause.** WordPress may advance an unpublished post's date when it receives
-an update without an explicit date. The verifier correctly required every
-unrequested field to remain unchanged but omitted the preflight date from the
-write payload, allowing WordPress to change the exact value it then verified.
+**Root cause.** WordPress advances an unpublished post's date when it receives
+an update without an explicit date. The verifier treated that draft-owned clock
+as immutable. Supplying the preflight date in 2.0.71 did not change WordPress's
+behavior on the live site.
 
-**Patch.** REST updates now carry the canonical preflight date when the caller
-did not explicitly request a date change. Explicit dates remain authoritative,
-and creates retain WordPress's ordinary date behavior.
+**Patch.** Explicit dates remain strictly verified. Updates to posts that were
+already published, private, or scheduled still require the original date to be
+preserved. For an unpublished draft or pending post whose caller supplied no
+date, the verifier accepts WordPress's normal clock advancement while continuing
+to verify every other field.
 
-**Guard — do not remove.** An update without a requested date must preserve the
-preflight date in the outbound write and verify the same date on readback.
+**Guard — do not remove.** Never fail an unpublished REST update solely because
+WordPress advanced an implicit date. Explicit dates and dates on previously
+published, private, or scheduled posts remain verification-bound.
 
 ## CAMPAIGN-BUG-045 — Plugin bridge duplicated SMP and reused WordPress passwords
 

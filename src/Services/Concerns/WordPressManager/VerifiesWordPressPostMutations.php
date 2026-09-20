@@ -836,9 +836,6 @@ PHP;
             ? $requestedStatus
             : 'draft';
         $writePayload = $this->buildRestPostPayload($payload);
-        if (! $isCreate && ! $has('date') && trim((string) ($before['post_date'] ?? '')) !== '') {
-            $writePayload['date'] = str_replace(' ', 'T', (string) $before['post_date']);
-        }
         $writePayload['status'] = $stageStatus;
         $writeEndpoint = $isCreate ? $endpoint : $endpoint.'/'.$postId;
         $writeResponse = $this->restRequest($target, 'post', $writeEndpoint, $writePayload);
@@ -998,7 +995,10 @@ PHP;
         $expected = $isCreate ? [] : (array) $before;
         $fields = $isCreate
             ? ['post_title', 'post_content', 'post_status', 'post_type']
-            : ['post_title', 'post_content', 'post_excerpt', 'post_status', 'post_date', 'post_name', 'post_type', 'post_author', 'featured_media', 'categories', 'tags'];
+            : ['post_title', 'post_content', 'post_excerpt', 'post_status', 'post_name', 'post_type', 'post_author', 'featured_media', 'categories', 'tags'];
+        if (! $isCreate && ! in_array((string) ($before['post_status'] ?? ''), ['draft', 'pending', 'auto-draft'], true)) {
+            $fields[] = 'post_date';
+        }
         $expected['post_status'] = $status;
         $expected['post_type'] = trim((string) ($payload['post_type'] ?? ($before['post_type'] ?? 'post'))) ?: 'post';
         $mapping = [

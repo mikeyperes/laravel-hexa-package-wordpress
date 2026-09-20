@@ -133,11 +133,12 @@ class WordPressRestPostIntegrityTest extends TestCase
         $this->assertCount(4, $this->requests);
     }
 
-    public function test_rest_update_preserves_the_preflight_date_when_no_date_change_was_requested(): void
+    public function test_rest_update_accepts_wordpress_advancing_an_implicit_draft_date(): void
     {
         $before = $this->post(505, 'draft');
         $updated = $before;
         $updated['title'] = ['raw' => 'Updated draft title', 'rendered' => 'Updated draft title'];
+        $updated['date'] = '2026-07-24T09:30:02';
         $this->queueResponses([
             [$before, 200],
             [['id' => 505], 200],
@@ -150,8 +151,10 @@ class WordPressRestPostIntegrityTest extends TestCase
         ]);
 
         $this->assertTrue($result['success']);
-        $this->assertSame('2026-07-24 09:30:00', $result['data']['post_date']);
-        $this->assertTrue($this->requestWasSent('POST', static fn (array $payload): bool => ($payload['date'] ?? null) === '2026-07-24T09:30:00'));
+        $this->assertSame('2026-07-24 09:30:02', $result['data']['post_date']);
+        $this->assertNotContains('post_date', $result['data']['verification']['checked_fields']);
+        $this->assertTrue($this->requestWasSent('POST', static fn (array $payload): bool => ($payload['title'] ?? null) === 'Updated draft title'
+            && ! array_key_exists('date', $payload)));
     }
 
     public function test_rest_update_mismatch_restores_original_published_snapshot(): void
