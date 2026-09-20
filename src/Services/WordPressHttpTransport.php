@@ -78,6 +78,61 @@ final class WordPressHttpTransport
     }
 
     /**
+     * Send one HWS Base Tools request using a body-bound HMAC signature.
+     * The shared secret never leaves Publish and is never included in the URL.
+     *
+     * @param  array<string, scalar|array<array-key, scalar>|null>  $body
+     * @param  array<string, scalar|array<array-key, scalar>|null>  $query
+     */
+    public function hmacJson(
+        string $method,
+        string $url,
+        string $route,
+        string $keyId,
+        string $secret,
+        array $body = [],
+        array $query = [],
+        int $timeoutSeconds = 30,
+    ): OutboundHttpResponse {
+        $this->assertSecureHmacTarget($url, $keyId, $secret);
+
+        $method = strtoupper($method);
+        $route = '/'.ltrim($route, '/');
+        $encodedBody = null;
+        if ($body !== [] && $method !== 'GET') {
+            $encodedBody = json_encode($body, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        }
+
+        $timestamp = (string) time();
+        $nonce = rtrim(strtr(base64_encode(random_bytes(24)), '+/', '-_'), '=');
+        $bodyHash = hash('sha256', (string) $encodedBody);
+        $canonical = implode("\n", [$method, $route, $timestamp, $nonce, $bodyHash]);
+        $headers = [
+            'Accept' => 'application/json',
+            'X-Hexa-Key-ID' => $keyId,
+            'X-Hexa-Timestamp' => $timestamp,
+            'X-Hexa-Nonce' => $nonce,
+            'X-Hexa-Content-SHA256' => $bodyHash,
+            'X-Hexa-Signature' => hash_hmac('sha256', $canonical, $secret),
+        ];
+        if ($encodedBody !== null) {
+            $headers['Content-Type'] = 'application/json';
+        }
+        if (isset($body['operation_id']) && is_scalar($body['operation_id'])) {
+            $headers['X-Hexa-Operation-ID'] = (string) $body['operation_id'];
+        }
+
+        return $this->client->request($method, $this->withQuery($url, $query), [
+            'headers' => $headers,
+            'body' => $encodedBody,
+            'timeout' => $timeoutSeconds,
+            'long_running' => $timeoutSeconds > 60,
+            'max_bytes' => self::MAX_REST_RESPONSE_BYTES,
+            'max_redirects' => 0,
+        ]);
+    }
+
+    /**
      * @param  array<string, scalar|array<array-key, scalar>|null>  $query
      * @param  array<string, scalar>  $headers
      */
@@ -194,6 +249,18 @@ final class WordPressHttpTransport
             || $applicationPassword === ''
             || strlen($username) > 512
             || strlen($applicationPassword) > 1024
+        ) {
+            throw new OutboundHttpException('invalid_request');
+        }
+    }
+
+    private function assertSecureHmacTarget(string $url, string $keyId, string $secret): void
+    {
+        if (
+            strtolower((string) parse_url($url, PHP_URL_SCHEME)) !== 'https'
+            || preg_match('/^hws_[a-f0-9]{24}$/', $keyId) !== 1
+            || strlen($secret) < 43
+            || strlen($secret) > 256
         ) {
             throw new OutboundHttpException('invalid_request');
         }

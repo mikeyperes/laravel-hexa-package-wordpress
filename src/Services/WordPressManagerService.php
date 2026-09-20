@@ -58,7 +58,7 @@ class WordPressManagerService
         }
 
         $mode = match ($mode) {
-            "wptoolkit", "smp_plugin", "hws_base_tools" => $mode,
+            "wptoolkit", "hws_base_tools" => $mode,
             default => "rest",
         };
 
@@ -68,6 +68,8 @@ class WordPressManagerService
             "url" => rtrim((string) ($target["url"] ?? $target["site_url"] ?? ""), "/"),
             "username" => (string) ($target["username"] ?? $target["wp_username"] ?? ""),
             "application_password" => (string) ($target["application_password"] ?? $target["wp_application_password"] ?? $target["app_password"] ?? ""),
+            "hws_key_id" => (string) ($target["hws_key_id"] ?? $target["key_id"] ?? $target["api_key_id"] ?? ""),
+            "hws_api_secret" => (string) ($target["hws_api_secret"] ?? $target["api_secret"] ?? $target["secret"] ?? ""),
             "server" => $server instanceof WhmServer ? $server : null,
             "install_id" => $installId > 0 ? $installId : null,
             "cpanel_user" => (string) ($target["cpanel_user"] ?? $target["cpanel_username"] ?? ""),
@@ -85,7 +87,7 @@ class WordPressManagerService
 
     public function usesPluginTransport(array $target): bool
     {
-        return in_array($this->normalizeTarget($target)["mode"], ["smp_plugin", "hws_base_tools"], true);
+        return $this->normalizeTarget($target)["mode"] === "hws_base_tools";
     }
 
     public function connectionMode(array $target): string
@@ -106,7 +108,6 @@ class WordPressManagerService
         }
 
         return match ($target["mode"]) {
-            "smp_plugin" => "SMP Publication Integration API",
             "hws_base_tools" => "HWS Base Tools API",
             default => "REST API",
         };
@@ -128,10 +129,15 @@ class WordPressManagerService
             ];
         }
 
-        if (($target["url"] ?? "") === "" || ($target["username"] ?? "") === "" || ($target["application_password"] ?? "") === "") {
+        $credentialsMissing = $target["mode"] === "hws_base_tools"
+            ? ($target["url"] ?? "") === "" || ($target["hws_key_id"] ?? "") === "" || ($target["hws_api_secret"] ?? "") === ""
+            : ($target["url"] ?? "") === "" || ($target["username"] ?? "") === "" || ($target["application_password"] ?? "") === "";
+        if ($credentialsMissing) {
             return [
                 "success" => false,
-                "message" => "WordPress Application Password credentials are incomplete.",
+                "message" => $target["mode"] === "hws_base_tools"
+                    ? "HWS Base Tools key credentials are incomplete."
+                    : "WordPress Application Password credentials are incomplete.",
                 "mode" => $target["mode"],
                 "label" => $this->connectionLabel($target),
             ];
@@ -234,7 +240,7 @@ class WordPressManagerService
 
         if ($this->usesPluginTransport($target)) {
             $route = $this->pluginPublishingRoute($target);
-            $result = $this->rest->requestRoute($target["url"], $target["username"], $target["application_password"], "get", $route, timeoutSeconds: 15);
+            $result = $this->rest->signedRequestRoute($target["url"], $target["hws_key_id"], $target["hws_api_secret"], "get", $route, timeoutSeconds: 15);
             if (!($result["success"] ?? false)) {
                 return ["success" => false, "message" => (string) ($result["message"] ?? "Plugin publishing connection failed."), "data" => null];
             }
@@ -251,10 +257,7 @@ class WordPressManagerService
 
     private function pluginPublishingRoute(array $target, string $suffix = ""): string
     {
-        $target = $this->normalizeTarget($target);
-        $base = $target["mode"] === "smp_plugin"
-            ? "smpi/v1/external-publishing"
-            : "hws-base-tools/v1/external-publishing";
+        $base = "hws-base-tools/v1/external-publishing";
 
         return $base.($suffix !== "" ? "/".ltrim($suffix, "/") : "");
     }

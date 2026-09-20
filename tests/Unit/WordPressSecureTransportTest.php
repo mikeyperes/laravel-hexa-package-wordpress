@@ -140,6 +140,44 @@ class WordPressSecureTransportTest extends TestCase
         $this->assertStringNotContainsString('application-password', $requests[0]->target->url);
     }
 
+    public function test_hws_bridge_transport_signs_the_exact_route_and_body_without_basic_auth(): void
+    {
+        $requests = [];
+        $transport = $this->transport(static function (OutboundHttpRequest $request) use (&$requests): OutboundHttpResponse {
+            $requests[] = $request;
+
+            return new OutboundHttpResponse(200, ['content-type' => 'application/json'], '{"enabled":true}');
+        });
+        $secret = str_repeat('s', 64);
+
+        $response = $transport->hmacJson(
+            'POST',
+            'https://wordpress.example.com/wp-json/hws-base-tools/v1/external-publishing/posts',
+            '/hws-base-tools/v1/external-publishing/posts',
+            'hws_0123456789abcdef01234567',
+            $secret,
+            ['title' => 'Signed article', 'operation_id' => 'publish:0123456789abcdef'],
+        );
+
+        $this->assertTrue($response->successful());
+        $this->assertCount(1, $requests);
+        $request = $requests[0];
+        $bodyHash = hash('sha256', (string) $request->body);
+        $canonical = implode("\n", [
+            'POST',
+            '/hws-base-tools/v1/external-publishing/posts',
+            $request->headers['X-Hexa-Timestamp'],
+            $request->headers['X-Hexa-Nonce'],
+            $bodyHash,
+        ]);
+        $this->assertSame($bodyHash, $request->headers['X-Hexa-Content-SHA256']);
+        $this->assertSame(hash_hmac('sha256', $canonical, $secret), $request->headers['X-Hexa-Signature']);
+        $this->assertSame('publish:0123456789abcdef', $request->headers['X-Hexa-Operation-ID']);
+        $this->assertArrayNotHasKey('Authorization', $request->headers);
+        $this->assertStringNotContainsString($secret, $request->target->url);
+        $this->assertStringNotContainsString($secret, (string) $request->body);
+    }
+
     public function test_public_redirects_are_revalidated_and_private_destinations_are_blocked(): void
     {
         $requests = [];

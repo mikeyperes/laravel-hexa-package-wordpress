@@ -17,6 +17,30 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## CAMPAIGN-BUG-045 — Plugin bridge duplicated SMP and reused WordPress passwords
+
+- **Severity:** High (the requested independent plugin-authentication boundary
+  was not implemented)
+- **Status:** Patched 2026-09-19 23:34 EST in 2.0.70
+- **Impact:** External publication exposed equivalent bridge routes through both
+  SMP Publication Integration and HWS Base Tools, while both still depended on
+  a WordPress username and Application Password. This created redundant plugin
+  ownership and did not provide the separately revocable bridge credential the
+  connection design required.
+
+**Root cause.** The first transport change treated the two plugin names as two
+publishing methods. The intended methods were native WordPress REST and one
+plugin bridge, with HWS Base Tools owning the latter.
+
+**Patch.** The package now recognizes only `hws_base_tools` as the plugin
+transport and signs each bridge request with a dedicated key ID and secret,
+timestamp, nonce, exact route, and SHA-256 body hash. Native REST continues to
+use WordPress Application Passwords. Unsupported bridge operations fail closed
+instead of silently falling back to Basic authentication.
+
+**Guard — do not remove.** HWS bridge requests must never include an
+`Authorization: Basic` header or reuse the WordPress REST credential fields.
+
 ## CAMPAIGN-BUG-013 — Staging verification rejected content rewritten by Post Hygiene
 
 - **Severity:** High (paid, finished articles turned back into drafts)

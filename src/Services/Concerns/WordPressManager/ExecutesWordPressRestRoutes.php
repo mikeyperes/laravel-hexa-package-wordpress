@@ -20,6 +20,15 @@ trait ExecutesWordPressRestRoutes
 
         $target = $this->normalizeTarget($target);
         if (! $this->usesWpToolkit($target)) {
+            if ($this->usesPluginTransport($target)) {
+                return [
+                    'success' => false,
+                    'status' => 422,
+                    'message' => 'Arbitrary REST routes are not exposed through the HWS Base Tools publishing bridge.',
+                    'data' => null,
+                ];
+            }
+
             return $this->rest->requestRoute($target['url'], $target['username'], $target['application_password'], $method, $route, $body, $query, 60);
         }
 

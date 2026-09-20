@@ -296,6 +296,65 @@ class WordPressService
         }
     }
 
+    /** Execute one HMAC-authenticated HWS Base Tools request. */
+    public function signedRequestRoute(
+        string $siteUrl,
+        string $keyId,
+        string $secret,
+        string $method,
+        string $endpoint,
+        array $body = [],
+        array $query = [],
+        int $timeoutSeconds = 30,
+    ): array {
+        if (! preg_match('#^/?[A-Za-z0-9_-]+/v[0-9]+/[A-Za-z0-9_/%:.-]+$#D', $endpoint)
+            || preg_match('~[\\x00-\\x20\\x7f\\\\\\\\?#]|(?:^|/)\\.\\.(?:/|$)~', rawurldecode($endpoint))) {
+            return ['success' => false, 'message' => 'Invalid WordPress REST route.', 'data' => null, 'status' => 400];
+        }
+        if (trim($siteUrl) === '' || trim($keyId) === '' || $secret === '') {
+            return ['success' => false, 'message' => 'HWS Base Tools credentials are incomplete.', 'data' => null, 'status' => null];
+        }
+
+        $route = ltrim($endpoint, '/');
+        try {
+            $response = $this->http->hmacJson(
+                $method,
+                rtrim($siteUrl, '/').'/wp-json/'.$route,
+                '/'.$route,
+                $keyId,
+                $secret,
+                $body,
+                $query,
+                $timeoutSeconds,
+            );
+            $payload = $this->decodeResponse($response);
+            if ($response->successful() && $payload === null) {
+                return ['success' => false, 'message' => 'WordPress returned malformed JSON.', 'data' => null, 'status' => $response->status];
+            }
+
+            return [
+                'success' => $response->successful(),
+                'message' => $response->successful() ? 'Signed plugin request succeeded.' : $this->remoteMessage($payload, $response->status),
+                'data' => $payload,
+                'status' => $response->status,
+            ];
+        } catch (Throwable $exception) {
+            $this->logFailure('signedRequestRoute', $siteUrl, $exception, [
+                'endpoint' => substr($route, 0, 160),
+                'method' => strtoupper($method),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $exception instanceof OutboundHttpException && $exception->failureCode() === 'invalid_request'
+                    ? 'The signed HWS Base Tools request is invalid or exceeds its security limits.'
+                    : 'The WordPress site could not be reached securely.',
+                'data' => null,
+                'status' => null,
+            ];
+        }
+    }
+
     public function publicGet(
         string $url,
         array $query = [],
