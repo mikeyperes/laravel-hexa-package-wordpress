@@ -836,6 +836,9 @@ PHP;
             ? $requestedStatus
             : 'draft';
         $writePayload = $this->buildRestPostPayload($payload);
+        if (! $isCreate && ! $has('date') && trim((string) ($before['post_date'] ?? '')) !== '') {
+            $writePayload['date'] = str_replace(' ', 'T', (string) $before['post_date']);
+        }
         $writePayload['status'] = $stageStatus;
         $writeEndpoint = $isCreate ? $endpoint : $endpoint.'/'.$postId;
         $writeResponse = $this->restRequest($target, 'post', $writeEndpoint, $writePayload);

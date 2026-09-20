@@ -133,6 +133,27 @@ class WordPressRestPostIntegrityTest extends TestCase
         $this->assertCount(4, $this->requests);
     }
 
+    public function test_rest_update_preserves_the_preflight_date_when_no_date_change_was_requested(): void
+    {
+        $before = $this->post(505, 'draft');
+        $updated = $before;
+        $updated['title'] = ['raw' => 'Updated draft title', 'rendered' => 'Updated draft title'];
+        $this->queueResponses([
+            [$before, 200],
+            [['id' => 505], 200],
+            [$updated, 200],
+            [$updated, 200],
+        ]);
+
+        $result = $this->manager()->updatePost($this->target(), 505, [
+            'title' => 'Updated draft title',
+        ]);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('2026-07-24 09:30:00', $result['data']['post_date']);
+        $this->assertTrue($this->requestWasSent('POST', static fn (array $payload): bool => ($payload['date'] ?? null) === '2026-07-24T09:30:00'));
+    }
+
     public function test_rest_update_mismatch_restores_original_published_snapshot(): void
     {
         $before = $this->post(503, 'publish');
