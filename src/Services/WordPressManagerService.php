@@ -113,6 +113,48 @@ class WordPressManagerService
         };
     }
 
+    /**
+     * The article-delivery contract, expressed independently of the transport.
+     * Pipeline-owned stages remain local; WordPress-owned stages identify the
+     * exact capability that each connection mode must provide and test.
+     */
+    public function publicationFeatures(array $target): array
+    {
+        $target = $this->normalizeTarget($target);
+        $mode = $this->usesWpToolkit($target) ? 'wptoolkit' : $target['mode'];
+        $externalMeta = $mode === 'rest' ? 'conditional' : 'supported';
+
+        return [
+            'mode' => $mode,
+            'label' => $this->connectionLabel($target),
+            'features' => [
+                ['key' => 'connection', 'label' => 'Connection and authentication', 'owner' => 'wordpress', 'support' => 'supported'],
+                ['key' => 'html_sanitize', 'label' => 'HTML sanitization', 'owner' => 'pipeline', 'support' => 'supported'],
+                ['key' => 'excerpt', 'label' => 'Excerpt', 'owner' => 'wordpress', 'support' => 'supported'],
+                ['key' => 'post_summary', 'label' => 'ACF post summary', 'owner' => 'wordpress', 'support' => $externalMeta],
+                ['key' => 'faq_repeater', 'label' => 'ACF FAQ repeater', 'owner' => 'wordpress', 'support' => $externalMeta],
+                ['key' => 'author', 'label' => 'Author resolution and author URL', 'owner' => 'wordpress', 'support' => 'supported'],
+                ['key' => 'inline_media', 'label' => 'Inline media upload and metadata', 'owner' => 'wordpress', 'support' => 'supported'],
+                ['key' => 'inline_media_rewrite', 'label' => 'Inline image URL rewrite', 'owner' => 'pipeline', 'support' => 'supported'],
+                ['key' => 'featured_media', 'label' => 'Featured media upload and assignment', 'owner' => 'wordpress', 'support' => 'supported'],
+                ['key' => 'categories', 'label' => 'Category resolution and creation', 'owner' => 'wordpress', 'support' => 'supported'],
+                ['key' => 'tags', 'label' => 'Tag resolution and creation', 'owner' => 'wordpress', 'support' => 'supported'],
+                ['key' => 'article_type', 'label' => 'Article-type taxonomy', 'owner' => 'wordpress', 'support' => 'conditional'],
+                ['key' => 'internal_links', 'label' => 'Internal-link validation and refill', 'owner' => 'pipeline', 'support' => 'supported'],
+                ['key' => 'integrity', 'label' => 'Delivery integrity checks', 'owner' => 'pipeline', 'support' => 'supported'],
+                ['key' => 'post_write', 'label' => 'Post create, update, and status', 'owner' => 'wordpress', 'support' => 'supported'],
+                ['key' => 'permalink', 'label' => 'Permalink readback', 'owner' => 'wordpress', 'support' => 'supported'],
+                ['key' => 'author_readback', 'label' => 'Author confirmation readback', 'owner' => 'wordpress', 'support' => 'supported'],
+                ['key' => 'article_audio', 'label' => 'Article audio generation', 'owner' => 'wordpress', 'support' => 'conditional'],
+                ['key' => 'cleanup', 'label' => 'Temporary upload cleanup', 'owner' => 'pipeline', 'support' => 'supported'],
+            ],
+            'optional' => [
+                ['key' => 'rank_math_readback', 'label' => 'Rank Math score readback', 'support' => $externalMeta],
+                ['key' => 'cache_purge', 'label' => 'Site cache purge', 'support' => $mode === 'rest' ? 'conditional' : 'supported'],
+            ],
+        ];
+    }
+
     public function warmConnection(array $target): array
     {
         $target = $this->normalizeTarget($target);

@@ -297,6 +297,24 @@ trait ManagesWordPressUsersAndMeta
     public function purgeSiteCache(array $target): array
     {
         $target = $this->normalizeTarget($target);
+        if (!$this->usesWpToolkit($target)) {
+            $result = $this->requestRestRoute(
+                $target,
+                'POST',
+                '/hws-base-tools/v1/external-publishing/cache/purge',
+                ['operation_id' => $this->pluginOperationId()],
+            );
+            $actions = array_values(array_unique(array_map('strval', (array) ($result['data']['purged'] ?? []))));
+
+            return [
+                'success' => (bool) ($result['success'] ?? false),
+                'message' => ($result['success'] ?? false)
+                    ? count($actions).' WordPress cache purge action(s) requested.'
+                    : (string) ($result['message'] ?? 'WordPress cache purge failed.'),
+                'actions' => $actions,
+                'warnings' => [],
+            ];
+        }
         $parts = [
             '$actions=[];',
             '$warnings=[];',

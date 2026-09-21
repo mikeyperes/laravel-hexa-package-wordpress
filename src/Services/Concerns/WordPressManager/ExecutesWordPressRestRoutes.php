@@ -9,7 +9,7 @@ trait ExecutesWordPressRestRoutes
      * WordPress actor, including the route's normal permission callback.
      * HTTP status is retained so callers can distinguish absence from failure.
      */
-    public function requestRestRoute(array $target, string $method, string $route, array $body = [], array $query = []): array
+    public function requestRestRoute(array $target, string $method, string $route, array $body = [], array $query = [], int $timeoutSeconds = 60): array
     {
         $method = strtoupper($method);
         if (! in_array($method, ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], true)
@@ -21,15 +21,38 @@ trait ExecutesWordPressRestRoutes
         $target = $this->normalizeTarget($target);
         if (! $this->usesWpToolkit($target)) {
             if ($this->usesPluginTransport($target)) {
-                return [
-                    'success' => false,
-                    'status' => 422,
-                    'message' => 'Arbitrary REST routes are not exposed through the HWS Base Tools publishing bridge.',
-                    'data' => null,
-                ];
+                $normalizedRoute = '/'.ltrim($route, '/');
+                $bridgeSuffix = null;
+                if (preg_match('#^/smp-tts/v1/posts/([1-9][0-9]*)/generate$#D', $normalizedRoute, $matches) === 1) {
+                    $bridgeSuffix = 'article-audio/'.$matches[1];
+                } elseif ($normalizedRoute === '/hws-base-tools/v1/external-publishing/cache/purge') {
+                    $bridgeSuffix = 'cache/purge';
+                }
+                if ($bridgeSuffix === null) {
+                    return [
+                        'success' => false,
+                        'status' => 422,
+                        'message' => 'This plugin REST route is not exposed through the HWS Base Tools publishing bridge.',
+                        'data' => null,
+                    ];
+                }
+                if ($method !== 'GET') {
+                    $body['operation_id'] = $this->pluginOperationId();
+                }
+
+                return $this->rest->signedRequestRoute(
+                    $target['url'],
+                    $target['hws_key_id'],
+                    $target['hws_api_secret'],
+                    $method,
+                    $this->pluginPublishingRoute($target, $bridgeSuffix),
+                    $body,
+                    $query,
+                    $timeoutSeconds,
+                );
             }
 
-            return $this->rest->requestRoute($target['url'], $target['username'], $target['application_password'], $method, $route, $body, $query, 60);
+            return $this->rest->requestRoute($target['url'], $target['username'], $target['application_password'], $method, $route, $body, $query, $timeoutSeconds);
         }
 
         $actor = $target['username'] ?: $target['default_author'];

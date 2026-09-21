@@ -17,6 +17,32 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## CAMPAIGN-BUG-064 — Plugin bridge stopped before complete article delivery
+
+- **Severity:** High (bridge-only campaigns could not complete the WordPress feature set)
+- **Status:** Patched 2026-09-21 00:17:10 EST in 2.0.73 and Publish app 18.17.43.
+- **Impact:** The HWS Base Tools transport could authenticate and mutate posts,
+  but media uploads, authors, categories, tags, article-type taxonomy, owned
+  metadata, article audio and cache purge were either unavailable or still
+  routed through native REST credentials.
+
+**Root cause.** The first bridge implementation treated posts as a special case
+instead of routing the bounded article-delivery contract through the selected
+WordPress transport.
+
+**Patch.** The package now maps posts, media, users and public post taxonomies
+to an allowlisted HWS Base Tools proxy, streams media with a body-bound HMAC,
+routes plugin-owned audio and cache actions explicitly, and exposes one
+19-stage publication feature contract for WP Toolkit, Application Password and
+HWS bridge connections.
+
+**Guard — do not remove.** HWS bridge requests must never carry Basic
+authentication or silently fall back to Application Password credentials.
+Every mutating bridge request remains operation-ID-bound and every route remains
+inside the explicit article-publishing allowlist.
+
+---
+
 ## CAMPAIGN-BUG-046 — Draft REST updates failed verification after WordPress advanced the post date
 
 - **Severity:** High (external-site drafts could be created but not updated)

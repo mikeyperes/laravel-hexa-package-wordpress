@@ -246,6 +246,60 @@ class WordPressSecureTransportTest extends TestCase
         }
     }
 
+    public function test_hws_bridge_media_upload_streams_body_bound_hmac_without_basic_auth(): void
+    {
+        $path = $this->imagePath();
+        $captured = [];
+        $guard = $this->guard();
+        $client = new SafeOutboundHttpClient($guard, static fn (): OutboundHttpResponse => new OutboundHttpResponse(500, [], '{}'));
+        $transport = new WordPressHttpTransport(
+            $client,
+            $guard,
+            static function (OutboundHttpRequest $request, string $streamPath, int $bytes) use (&$captured): OutboundHttpResponse {
+                $captured = compact('request', 'streamPath', 'bytes');
+
+                return new OutboundHttpResponse(201, ['content-type' => 'application/json'], '{"id":45}');
+            },
+        );
+        $route = '/hws-base-tools/v1/external-publishing/media/upload';
+        $secret = str_repeat('s', 64);
+
+        try {
+            $response = $transport->hmacUploadImage(
+                'https://wordpress.example.com/wp-json'. $route,
+                $route,
+                'hws_0123456789abcdef01234567',
+                $secret,
+                'publish:0123456789abcdef',
+                $path,
+                'article-image.png',
+                'image/png',
+                (int) filesize($path),
+            );
+
+            $request = $captured['request'];
+            $bodyHash = hash_file('sha256', $path);
+            $canonical = implode("\n", [
+                'POST',
+                $route,
+                $request->headers['X-Hexa-Timestamp'],
+                $request->headers['X-Hexa-Nonce'],
+                $bodyHash,
+            ]);
+            $this->assertTrue($response->successful());
+            $this->assertSame($path, $captured['streamPath']);
+            $this->assertSame(filesize($path), $captured['bytes']);
+            $this->assertNull($request->body);
+            $this->assertSame($bodyHash, $request->headers['X-Hexa-Content-SHA256']);
+            $this->assertSame(hash_hmac('sha256', $canonical, $secret), $request->headers['X-Hexa-Signature']);
+            $this->assertSame('publish:0123456789abcdef', $request->headers['X-Hexa-Operation-ID']);
+            $this->assertArrayNotHasKey('Authorization', $request->headers);
+            $this->assertSame('attachment; filename="article-image.png"', $request->headers['Content-Disposition']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function test_stream_upload_preserves_media_larger_than_the_core_json_body_limit(): void
     {
         $path = $this->imagePath();

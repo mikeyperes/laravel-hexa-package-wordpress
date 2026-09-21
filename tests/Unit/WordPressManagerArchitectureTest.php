@@ -15,7 +15,7 @@ class WordPressManagerArchitectureTest extends TestCase
         );
 
         foreach ([
-            'normalizeTarget', 'usesWpToolkit', 'connectionMode', 'connectionLabel',
+            'normalizeTarget', 'usesWpToolkit', 'connectionMode', 'connectionLabel', 'publicationFeatures',
             'warmConnection', 'discoverInstallsForAccount', 'testConnection',
             'testWriteAccess', 'inspectPlugin', 'syncPluginFromGitHub',
             'getAcfFieldInventory', 'getAcfValues', 'listAuthors',
@@ -33,6 +33,41 @@ class WordPressManagerArchitectureTest extends TestCase
         ] as $method) {
             $this->assertTrue(method_exists(WordPressManagerService::class, $method), $method);
         }
+    }
+
+    public function test_publication_feature_contract_tracks_the_nineteen_article_stages_for_every_mode(): void
+    {
+        $manager = app(WordPressManagerService::class);
+        foreach (['wptoolkit', 'rest', 'hws_base_tools'] as $mode) {
+            $contract = $manager->publicationFeatures(['mode' => $mode]);
+            $this->assertCount(19, $contract['features']);
+            $this->assertSame(19, count(array_unique(array_column($contract['features'], 'key'))));
+            $this->assertContains('post_write', array_column($contract['features'], 'key'));
+            $this->assertContains('inline_media', array_column($contract['features'], 'key'));
+            $this->assertContains('faq_repeater', array_column($contract['features'], 'key'));
+        }
+    }
+
+    public function test_external_warmup_accepts_only_the_selected_transport_credentials(): void
+    {
+        $manager = app(WordPressManagerService::class);
+        $bridge = $manager->warmConnection([
+            'mode' => 'hws_base_tools',
+            'url' => 'https://wordpress.example.com',
+            'hws_key_id' => 'hws_0123456789abcdef01234567',
+            'hws_api_secret' => str_repeat('s', 64),
+        ]);
+        $rest = $manager->warmConnection([
+            'mode' => 'rest',
+            'url' => 'https://wordpress.example.com',
+            'username' => 'editor',
+            'application_password' => 'application-password',
+        ]);
+
+        $this->assertTrue($bridge['success']);
+        $this->assertTrue($rest['success']);
+        $this->assertFalse($manager->warmConnection(['mode' => 'hws_base_tools'])['success']);
+        $this->assertFalse($manager->warmConnection(['mode' => 'rest'])['success']);
     }
 
     public function test_manager_units_stay_below_the_architecture_threshold(): void

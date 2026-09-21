@@ -202,24 +202,64 @@ final class WordPressHttpTransport
             maxResponseBytes: self::MAX_UPLOAD_RESPONSE_BYTES,
         );
 
-        if ($this->streamTransport !== null) {
-            try {
-                $response = ($this->streamTransport)($request, $path, $bytes);
-            } catch (OutboundHttpException $exception) {
-                throw $exception;
-            } catch (Throwable) {
-                throw new OutboundHttpException('transport_failed');
-            }
+        return $this->streamUpload($request, $path, $bytes);
+    }
 
-            if (! $response instanceof OutboundHttpResponse) {
-                throw new OutboundHttpException('invalid_response');
-            }
-            if (strlen($response->body) > $request->maxResponseBytes) {
-                throw new OutboundHttpException('response_too_large');
-            }
-
-            return $response;
+    public function hmacUploadImage(
+        string $url,
+        string $route,
+        string $keyId,
+        string $secret,
+        string $operationId,
+        string $path,
+        string $filename,
+        string $mimeType,
+        int $bytes,
+    ): OutboundHttpResponse {
+        $this->assertSecureHmacTarget($url, $keyId, $secret);
+        if (
+            preg_match('/^[A-Za-z0-9._:-]{16,128}$/', $operationId) !== 1
+            || $bytes <= 0
+            || $bytes > self::MAX_IMAGE_BYTES
+            || ! in_array(strtolower($mimeType), self::IMAGE_MIME_TYPES, true)
+            || ! is_file($path)
+            || ! is_readable($path)
+        ) {
+            throw new OutboundHttpException('invalid_request');
         }
+
+        $actualBytes = filesize($path);
+        if (! is_int($actualBytes) || $actualBytes !== $bytes) {
+            throw new OutboundHttpException('invalid_request');
+        }
+        $bodyHash = hash_file('sha256', $path);
+        if (! is_string($bodyHash) || preg_match('/^[a-f0-9]{64}$/', $bodyHash) !== 1) {
+            throw new OutboundHttpException('invalid_request');
+        }
+
+        $filename = $this->safeFilename($filename);
+        $route = '/'.ltrim($route, '/');
+        $timestamp = (string) time();
+        $nonce = rtrim(strtr(base64_encode(random_bytes(24)), '+/', '-_'), '=');
+        $canonical = implode("\n", ['POST', $route, $timestamp, $nonce, $bodyHash]);
+        $request = new OutboundHttpRequest(
+            method: 'POST',
+            target: $this->resolveUploadTarget($url),
+            headers: [
+                'Accept' => 'application/json',
+                'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+                'Content-Type' => strtolower($mimeType),
+                'X-Hexa-Key-ID' => $keyId,
+                'X-Hexa-Timestamp' => $timestamp,
+                'X-Hexa-Nonce' => $nonce,
+                'X-Hexa-Content-SHA256' => $bodyHash,
+                'X-Hexa-Signature' => hash_hmac('sha256', $canonical, $secret),
+                'X-Hexa-Operation-ID' => $operationId,
+            ],
+            body: null,
+            timeoutSeconds: 60,
+            maxResponseBytes: self::MAX_UPLOAD_RESPONSE_BYTES,
+        );
 
         return $this->streamUpload($request, $path, $bytes);
     }
@@ -286,6 +326,25 @@ final class WordPressHttpTransport
 
     private function streamUpload(OutboundHttpRequest $request, string $path, int $bytes): OutboundHttpResponse
     {
+        if ($this->streamTransport !== null) {
+            try {
+                $response = ($this->streamTransport)($request, $path, $bytes);
+            } catch (OutboundHttpException $exception) {
+                throw $exception;
+            } catch (Throwable) {
+                throw new OutboundHttpException('transport_failed');
+            }
+
+            if (! $response instanceof OutboundHttpResponse) {
+                throw new OutboundHttpException('invalid_response');
+            }
+            if (strlen($response->body) > $request->maxResponseBytes) {
+                throw new OutboundHttpException('response_too_large');
+            }
+
+            return $response;
+        }
+
         if (! function_exists('curl_init')) {
             throw new OutboundHttpException('transport_unavailable');
         }

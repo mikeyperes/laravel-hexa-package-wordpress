@@ -221,6 +221,66 @@ class WordPressService
         }
     }
 
+    /** @return array{success: bool, message: string, data: array|null} */
+    public function signedUploadMedia(
+        string $siteUrl,
+        string $route,
+        string $keyId,
+        string $secret,
+        string $operationId,
+        string $filePath,
+        string $fileName = '',
+    ): array {
+        $artifact = null;
+
+        try {
+            $artifact = $this->media->acquire($filePath, $fileName);
+            $route = ltrim($route, '/');
+            $response = $this->http->hmacUploadImage(
+                rtrim($siteUrl, '/').'/wp-json/'.$route,
+                '/'.$route,
+                $keyId,
+                $secret,
+                $operationId,
+                $artifact->path,
+                $artifact->filename,
+                $artifact->mimeType,
+                $artifact->bytes,
+            );
+            $payload = $this->decodeResponse($response);
+            if (! $response->successful()) {
+                return ['success' => false, 'message' => 'WordPress error: '.$this->remoteMessage($payload, $response->status), 'data' => null];
+            }
+
+            $mediaId = (int) ($payload['id'] ?? 0);
+            if ($mediaId <= 0) {
+                return ['success' => false, 'message' => 'WordPress returned an invalid media response.', 'data' => null];
+            }
+
+            return [
+                'success' => true,
+                'message' => "Media uploaded through HWS Base Tools: {$artifact->filename} (ID: {$mediaId}).",
+                'data' => [
+                    'media_id' => $mediaId,
+                    'media_url' => isset($payload['source_url']) ? (string) $payload['source_url'] : null,
+                    'media_title' => $this->rendered($payload['title'] ?? $artifact->filename),
+                ],
+            ];
+        } catch (MediaPipelineException $exception) {
+            $this->logFailure('signedUploadMedia', $siteUrl, $exception, ['error_code' => $exception->errorCode]);
+
+            return ['success' => false, 'message' => $this->mediaFailureMessage($exception), 'data' => null];
+        } catch (Throwable $exception) {
+            $this->logFailure('signedUploadMedia', $siteUrl, $exception);
+
+            return ['success' => false, 'message' => 'The signed media upload could not be completed securely.', 'data' => null];
+        } finally {
+            if ($artifact instanceof MediaArtifact) {
+                $artifact->release();
+            }
+        }
+    }
+
     /**
      * Shared authenticated REST boundary for WordPressManagerService.
      *

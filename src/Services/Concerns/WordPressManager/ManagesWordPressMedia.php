@@ -20,6 +20,39 @@ trait ManagesWordPressMedia
             return $this->wptoolkit->wpCliUploadMedia($target['server'], (int) $target['install_id'], $filePath, $fileName, $altText, $caption, $description);
         }
 
+        if ($this->usesPluginTransport($target)) {
+            $uploaded = $this->rest->signedUploadMedia(
+                $target['url'],
+                $this->pluginPublishingRoute($target, 'media/upload'),
+                $target['hws_key_id'],
+                $target['hws_api_secret'],
+                $this->pluginOperationId(),
+                $filePath,
+                $fileName,
+            );
+            $mediaId = (int) ($uploaded['data']['media_id'] ?? 0);
+            if (!($uploaded['success'] ?? false) || $mediaId <= 0) {
+                return $uploaded;
+            }
+            $attributes = array_filter([
+                'alt_text' => $altText,
+                'caption' => $caption,
+                'description' => $description,
+            ], static fn (string $value): bool => $value !== '');
+            if ($attributes !== []) {
+                $metadata = $this->updateMedia($target, $mediaId, $attributes);
+                if (!($metadata['success'] ?? false)) {
+                    return [
+                        'success' => false,
+                        'message' => (string) ($metadata['message'] ?? 'Media uploaded but its metadata could not be saved.'),
+                        'data' => $uploaded['data'],
+                    ];
+                }
+            }
+
+            return $uploaded;
+        }
+
         return $this->rest->uploadMedia($target['url'], $target['username'], $target['application_password'], $filePath, $fileName, $altText);
     }
 
