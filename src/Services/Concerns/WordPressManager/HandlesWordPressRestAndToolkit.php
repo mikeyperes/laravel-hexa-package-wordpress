@@ -26,12 +26,19 @@ trait HandlesWordPressRestAndToolkit
                 $body['operation_id'] = $this->pluginOperationId();
             }
 
+            // CRITICAL — see BUGLOG.md CAMPAIGN-BUG-074.
+            // Security layers can reject an outer route containing wp/v2/users
+            // before HWS Base Tools authenticates the signed bridge request.
+            $bridgeSuffix = strtoupper($method) === 'GET' && $endpoint === 'users'
+                ? 'authors'
+                : 'wp/v2/'.$endpoint;
+
             return $this->rest->signedRequestRoute(
                 $target["url"],
                 $target["hws_key_id"],
                 $target["hws_api_secret"],
                 $method,
-                $this->pluginPublishingRoute($target, 'wp/v2/'.$endpoint),
+                $this->pluginPublishingRoute($target, $bridgeSuffix),
                 $body,
                 $query,
                 60,

@@ -11,6 +11,48 @@ use PHPUnit\Framework\TestCase;
 
 class WordPressRestRouteTest extends TestCase
 {
+    public function test_plugin_author_lookup_uses_the_dedicated_signed_authors_route(): void
+    {
+        $rest = $this->createMock(WordPressService::class);
+        $rest->expects($this->once())->method('signedRequestRoute')->with(
+            'https://example.org',
+            'hws_0123456789abcdef01234567',
+            str_repeat('s', 64),
+            'get',
+            'hws-base-tools/v1/external-publishing/authors',
+            [],
+            [
+                'per_page' => 100,
+                'context' => 'edit',
+                '_fields' => 'id,name,slug,email,roles',
+            ],
+            60,
+        )->willReturn([
+            'success' => true,
+            'status' => 200,
+            'message' => 'Signed plugin request succeeded.',
+            'data' => [[
+                'id' => 53,
+                'name' => 'Humza Khan',
+                'slug' => 'hakhan96',
+                'email' => 'author@example.org',
+                'roles' => ['author'],
+            ]],
+        ]);
+
+        $manager = new WordPressManagerService($this->createMock(WpToolkitService::class), $rest);
+        $result = $manager->listAuthors([
+            'mode' => 'hws_base_tools',
+            'url' => 'https://example.org',
+            'hws_key_id' => 'hws_0123456789abcdef01234567',
+            'hws_api_secret' => str_repeat('s', 64),
+        ], true);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('hakhan96', $result['authors'][0]['user_login']);
+        $this->assertSame(['author'], $result['authors'][0]['roles']);
+    }
+
     public function test_http_mode_uses_authenticated_namespaced_transport(): void
     {
         $rest = $this->createMock(WordPressService::class);

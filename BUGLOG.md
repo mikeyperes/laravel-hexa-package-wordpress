@@ -17,6 +17,18 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## CAMPAIGN-BUG-074 — HWS bridge author discovery used a protected core users path
+
+- **Severity:** High (all HWS bridge campaign operations stopped before generation)
+- **Status:** Patched 2026-09-21 02:06:03 EST in 2.0.75 and HWS Base Tools 13.2.19.
+- **Impact:** Her Forward operation 6871 passed HMAC authentication but failed author resolution with `Sorry, you are not allowed to list users.` No article body, AI charge, WordPress post or media was created.
+
+**Root cause.** The package routed HWS author discovery through the generic bridge path `/external-publishing/wp/v2/users`. Her Forward's WordPress security layer rejected that outer users path before HWS Base Tools could run its signed bridge permission callback.
+
+**Patch.** HWS Base Tools exposes a dedicated signed `/external-publishing/authors` endpoint with its own `list_users` gate. The WordPress package routes only HWS author discovery to that endpoint; native Application Password and WP Toolkit author discovery are unchanged.
+
+**Guard — do not remove.** HWS bridge author discovery must use the dedicated authors endpoint and must never fall back to Basic authentication or the protected generic users proxy.
+
 ## CAMPAIGN-BUG-065 — REST taxonomy resolution missed existing terms after page 1
 
 - **Severity:** High (finished articles could fail before WordPress post creation)
