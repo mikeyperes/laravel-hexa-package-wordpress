@@ -247,12 +247,35 @@ trait ManagesWordPressTaxonomies
                 continue;
             }
 
+            // CRITICAL — see BUGLOG.md CAMPAIGN-BUG-065.
+            // The collection endpoint is paginated, so the first 100 terms are
+            // only a cache warm-up. Search every unresolved requested name
+            // directly before attempting creation.
+            $existingTermId = $this->findRestTermIdByName($target, $taxonomy, $name);
+            if ($existingTermId > 0) {
+                $termIds[] = $existingTermId;
+                $details[] = ["name" => $name, "id" => $existingTermId, "existed" => true, "error" => null];
+                $map[$key] = $existingTermId;
+                continue;
+            }
+
             $created = $this->restRequest($target, "post", $this->restTaxonomyEndpoint($taxonomy), ["name" => $name]);
             if (($created["success"] ?? false) && is_array($created["data"] ?? null) && !empty($created["data"]["id"])) {
                 $termId = (int) $created["data"]["id"];
                 $termIds[] = $termId;
                 $details[] = ["name" => $name, "id" => $termId, "existed" => false, "error" => null];
                 $map[$key] = $termId;
+                continue;
+            }
+
+            // WordPress returns the existing term ID in a term_exists
+            // conflict. Treat that as a successful resolution, never as a
+            // reason to discard an otherwise ready article.
+            $conflictTermId = $this->restTermConflictId($created);
+            if ($conflictTermId > 0) {
+                $termIds[] = $conflictTermId;
+                $details[] = ["name" => $name, "id" => $conflictTermId, "existed" => true, "error" => null];
+                $map[$key] = $conflictTermId;
                 continue;
             }
 
@@ -265,6 +288,46 @@ trait ManagesWordPressTaxonomies
             "term_ids" => array_values(array_unique(array_filter(array_map("intval", $termIds)))),
             "term_details" => $details,
         ];
+    }
+
+    private function findRestTermIdByName(array $target, string $taxonomy, string $name): int
+    {
+        $response = $this->restRequest($target, "get", $this->restTaxonomyEndpoint($taxonomy), [], [
+            "search" => $name,
+            "per_page" => 100,
+        ]);
+        if (!($response["success"] ?? false)) {
+            return 0;
+        }
+
+        $expected = $this->termLookupKey($name);
+        foreach ((array) ($response["data"] ?? []) as $term) {
+            if (!is_array($term) || $this->termLookupKey((string) ($term["name"] ?? "")) !== $expected) {
+                continue;
+            }
+
+            $termId = (int) ($term["id"] ?? $term["term_id"] ?? 0);
+            if ($termId > 0) {
+                return $termId;
+            }
+        }
+
+        return 0;
+    }
+
+    private function restTermConflictId(array $response): int
+    {
+        $payload = is_array($response["data"] ?? null) ? $response["data"] : [];
+        if (($payload["code"] ?? null) !== "term_exists") {
+            return 0;
+        }
+
+        return max(0, (int) ($payload["data"]["term_id"] ?? $payload["term_id"] ?? 0));
+    }
+
+    private function termLookupKey(string $name): string
+    {
+        return mb_strtolower(trim(html_entity_decode($name, ENT_QUOTES | ENT_HTML5, "UTF-8")));
     }
 
 }

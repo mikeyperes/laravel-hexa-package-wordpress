@@ -17,6 +17,30 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## CAMPAIGN-BUG-065 — REST taxonomy resolution missed existing terms after page 1
+
+- **Severity:** High (finished articles could fail before WordPress post creation)
+- **Status:** Patched 2026-09-21 01:25:03 EST in 2.0.74.
+- **Impact:** Her Forward operation 6865 could not resolve the existing `Law and
+  Legal Services` category (term 8701). The pipeline uploaded media and then
+  stopped before creating a post, leaving the paid article unpublished.
+
+**Root cause.** The REST-backed taxonomy resolver treated the first 100 terms
+returned by the collection endpoint as a complete inventory. When an older term
+was not on that page, it attempted a duplicate create and treated WordPress's
+`term_exists` response as a hard failure even though the response contained the
+canonical existing term ID.
+
+**Patch.** Every requested name absent from the initial page is now searched
+directly through the taxonomy endpoint. A race or stale search that still
+reaches duplicate creation recovers the existing ID from WordPress's
+`term_exists` response. Both native Application Password and HWS Base Tools
+transports use the same corrected resolver.
+
+**Guard — do not remove.** A requested REST-backed taxonomy term must not be
+declared missing solely because it is outside the first collection page, and a
+valid `term_exists` response must resolve to its returned term ID.
+
 ## CAMPAIGN-BUG-064 — Plugin bridge stopped before complete article delivery
 
 - **Severity:** High (bridge-only campaigns could not complete the WordPress feature set)
