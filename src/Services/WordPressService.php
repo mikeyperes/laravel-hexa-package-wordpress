@@ -431,6 +431,74 @@ class WordPressService
         return $this->http->validatedPublicUrl($url);
     }
 
+    /**
+     * Read the public WordPress REST index without returning route payloads.
+     *
+     * @return array{success: bool, message: string, status: int|null, namespaces: array<int, string>, route_count: int}
+     */
+    public function discoverRestIndex(string $siteUrl): array
+    {
+        $url = rtrim(trim($siteUrl), '/').'/wp-json/';
+        $validatedUrl = $this->validatedPublicUrl($url);
+        if ($validatedUrl === null) {
+            return [
+                'success' => false,
+                'message' => 'The WordPress REST index URL is invalid.',
+                'status' => null,
+                'namespaces' => [],
+                'route_count' => 0,
+            ];
+        }
+
+        try {
+            $response = $this->http->publicGet(
+                $validatedUrl,
+                timeoutSeconds: 15,
+                maxResponseBytes: WordPressHttpTransport::MAX_PUBLIC_DOCUMENT_BYTES,
+                maxRedirects: 0,
+            );
+            $payload = $this->decodeResponse($response);
+            if (! $response->successful() || $payload === null) {
+                return [
+                    'success' => false,
+                    'message' => $response->successful()
+                        ? 'WordPress returned a malformed REST index.'
+                        : 'WordPress REST index returned HTTP '.$response->status.'.',
+                    'status' => $response->status,
+                    'namespaces' => [],
+                    'route_count' => 0,
+                ];
+            }
+
+            $namespaces = array_values(array_unique(array_filter(array_map(
+                static fn (mixed $namespace): string => is_string($namespace)
+                    && preg_match('#^[A-Za-z0-9_-]+/v[0-9]+$#D', $namespace) === 1
+                        ? $namespace
+                        : '',
+                (array) ($payload['namespaces'] ?? []),
+            ))));
+            sort($namespaces);
+
+            return [
+                'success' => true,
+                'message' => 'WordPress REST index discovered.',
+                'status' => $response->status,
+                'namespaces' => $namespaces,
+                'route_count' => count(array_filter((array) ($payload['routes'] ?? []), 'is_array')),
+            ];
+        } catch (Throwable $exception) {
+            $this->logFailure('discoverRestIndex', $siteUrl, $exception);
+
+            return [
+                'success' => false,
+                'message' => 'The WordPress REST index could not be reached securely.',
+                'status' => null,
+                'namespaces' => [],
+                'route_count' => 0,
+            ];
+        }
+    }
+
     /** @return array{success: bool, message: string, data: array|null} */
     public function getCategories(string $siteUrl, string $username, string $appPassword): array
     {

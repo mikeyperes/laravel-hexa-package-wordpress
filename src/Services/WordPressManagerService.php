@@ -297,6 +297,210 @@ class WordPressManagerService
         return $this->rest->testConnection($target["url"], $target["username"], $target["application_password"]);
     }
 
+    /**
+     * Build a secret-free, persistable connection and capability report.
+     *
+     * The report intentionally retains only presence booleans, safe WordPress
+     * actor fields, endpoint status, namespaces, and the publication feature
+     * contract. It never returns a password, signing secret, auth header, nonce,
+     * cookie, or raw remote payload.
+     */
+    public function connectionReport(array $target): array
+    {
+        $target = $this->normalizeTarget($target);
+        $authentication = $this->testConnection($target);
+        $contract = $this->publicationFeatures($target);
+        $mode = $this->usesWpToolkit($target) ? 'wptoolkit' : $target['mode'];
+        $modeId = $mode === 'rest' ? 'wp_rest_api' : $mode;
+        $restIndex = $target['url'] !== ''
+            ? $this->rest->discoverRestIndex($target['url'])
+            : ['success' => false, 'message' => 'No WordPress URL is configured.', 'status' => null, 'namespaces' => [], 'route_count' => 0];
+        $namespaces = array_values(array_filter((array) ($restIndex['namespaces'] ?? []), 'is_string'));
+
+        $endpointDefinitions = [
+            'posts' => ['label' => 'Posts', 'query' => ['context' => 'edit', 'per_page' => 1, '_fields' => 'id']],
+            'media' => ['label' => 'Media', 'query' => ['context' => 'edit', 'per_page' => 1, '_fields' => 'id']],
+            'categories' => ['label' => 'Categories', 'query' => ['per_page' => 1, '_fields' => 'id']],
+            'tags' => ['label' => 'Tags', 'query' => ['per_page' => 1, '_fields' => 'id']],
+            'users' => ['label' => 'Users', 'query' => ['context' => 'edit', 'per_page' => 1, '_fields' => 'id']],
+            'types' => ['label' => 'Post types', 'query' => ['context' => 'edit', '_fields' => 'slug,rest_base']],
+            'taxonomies' => ['label' => 'Taxonomies', 'query' => ['context' => 'edit', '_fields' => 'slug,rest_base']],
+        ];
+        $endpoints = [];
+        $taxonomies = [];
+
+        if (($authentication['success'] ?? false) === true && $mode !== 'wptoolkit') {
+            foreach ($endpointDefinitions as $resource => $definition) {
+                $result = $this->restRequest($target, 'GET', $resource, query: $definition['query']);
+                $endpoints[$resource] = [
+                    'label' => $definition['label'],
+                    'supported' => (bool) ($result['success'] ?? false),
+                    'status' => is_numeric($result['status'] ?? null) ? (int) $result['status'] : null,
+                ];
+                if ($resource === 'taxonomies' && ($result['success'] ?? false) === true) {
+                    $taxonomies = array_values(array_filter(array_map(
+                        static fn (mixed $slug): string => is_string($slug)
+                            && preg_match('/^[A-Za-z0-9_-]{1,80}$/D', $slug) === 1
+                                ? $slug
+                                : '',
+                        array_keys((array) ($result['data'] ?? [])),
+                    )));
+                    sort($taxonomies);
+                }
+            }
+        } elseif (($authentication['success'] ?? false) === true && $mode === 'wptoolkit') {
+            foreach ($endpointDefinitions as $resource => $definition) {
+                $endpoints[$resource] = [
+                    'label' => $definition['label'],
+                    'supported' => true,
+                    'status' => null,
+                ];
+            }
+        }
+
+        $rankMathAvailable = $this->hasNamespace($namespaces, 'rankmath/');
+        $yoastAvailable = $this->hasNamespace($namespaces, 'yoast/');
+        $acfAvailable = $this->hasNamespace($namespaces, 'acf/');
+        $articleAudioAvailable = $this->hasNamespace($namespaces, 'smp-tts/');
+        $articleTaxonomyAvailable = count(array_intersect(
+            $taxonomies,
+            ['article_type', 'article-type', 'publication', 'publications', 'smp_article_type'],
+        )) > 0;
+        $indexKnown = (bool) ($restIndex['success'] ?? false);
+
+        $features = array_map(function (array $feature) use ($acfAvailable, $articleAudioAvailable, $articleTaxonomyAvailable, $indexKnown, $mode): array {
+            if (in_array($feature['key'], ['post_summary', 'faq_repeater'], true)) {
+                $feature['support'] = $indexKnown ? ($acfAvailable ? 'conditional' : 'unsupported') : 'conditional';
+                $feature['detail'] = $indexKnown
+                    ? ($acfAvailable ? 'ACF REST namespace detected; field registration is verified during publication.' : 'No ACF REST namespace detected.')
+                    : 'ACF REST availability was not determined.';
+            } elseif ($feature['key'] === 'article_type') {
+                $feature['support'] = $mode === 'wptoolkit'
+                    ? 'conditional'
+                    : ($articleTaxonomyAvailable ? 'supported' : ($indexKnown ? 'unsupported' : 'conditional'));
+                $feature['detail'] = $articleTaxonomyAvailable
+                    ? 'An article taxonomy REST resource was detected.'
+                    : 'No article taxonomy REST resource was detected.';
+            } elseif ($feature['key'] === 'article_audio') {
+                $feature['support'] = $indexKnown ? ($articleAudioAvailable ? 'supported' : 'unsupported') : 'conditional';
+                $feature['detail'] = $articleAudioAvailable
+                    ? 'Article-audio namespace detected.'
+                    : 'Article-audio namespace not detected.';
+            }
+
+            return $feature;
+        }, (array) ($contract['features'] ?? []));
+
+        $optional = array_map(function (array $feature) use ($rankMathAvailable, $yoastAvailable, $indexKnown): array {
+            if ($feature['key'] === 'rank_math_readback') {
+                $feature['support'] = $indexKnown ? ($rankMathAvailable ? 'supported' : 'unsupported') : 'conditional';
+                $feature['detail'] = $rankMathAvailable
+                    ? 'Rank Math namespace detected.'
+                    : ($yoastAvailable ? 'Yoast is active instead of Rank Math.' : 'Rank Math namespace not detected.');
+            }
+
+            return $feature;
+        }, (array) ($contract['optional'] ?? []));
+
+        $endpointReady = $endpoints !== []
+            && collect($endpoints)->every(static fn (array $endpoint): bool => $endpoint['supported'] === true);
+        $transportReady = (bool) ($authentication['success'] ?? false);
+        $capabilityState = ! $transportReady
+            ? 'blocked'
+            : ($endpointReady ? 'ready' : 'limited');
+        $authData = is_array($authentication['data'] ?? null) ? $authentication['data'] : [];
+
+        $report = [
+            'schema_version' => 1,
+            'validated_at' => now()->utc()->toIso8601String(),
+            'mode_id' => $modeId,
+            'mode_label' => $this->connectionLabel($target),
+            'configuration_state' => $this->connectionConfigured($target) ? 'configured' : 'incomplete',
+            'transport_state' => $transportReady ? 'ready' : 'blocked',
+            'capability_state' => $capabilityState,
+            'validation' => [
+                'success' => $transportReady,
+                'message' => trim((string) ($authentication['message'] ?? '')),
+            ],
+            'authentication' => [
+                'method' => match ($mode) {
+                    'wptoolkit' => 'Protected WP Toolkit installation binding',
+                    'hws_base_tools' => 'HMAC-signed HWS Base Tools key',
+                    default => 'WordPress Application Password',
+                },
+                'credentials' => match ($mode) {
+                    'wptoolkit' => [
+                        'server_binding' => $target['server'] instanceof WhmServer,
+                        'installation_binding' => ! empty($target['install_id']),
+                    ],
+                    'hws_base_tools' => [
+                        'key_id' => trim($target['hws_key_id']) !== '',
+                        'signing_secret' => $target['hws_api_secret'] !== '',
+                    ],
+                    default => [
+                        'username' => trim($target['username']) !== '',
+                        'application_password' => $target['application_password'] !== '',
+                    ],
+                },
+                'actor' => array_filter([
+                    'configured_username' => trim($target['username']) !== '' ? trim($target['username']) : trim($target['default_author']),
+                    'user_id' => isset($authData['user_id']) ? (int) $authData['user_id'] : null,
+                    'display_name' => isset($authData['user_name']) ? trim((string) $authData['user_name']) : null,
+                    'slug' => isset($authData['user_slug']) ? trim((string) $authData['user_slug']) : null,
+                    'roles' => array_values(array_filter((array) ($authData['roles'] ?? []), 'is_string')),
+                ], static fn (mixed $value): bool => $value !== null && $value !== '' && $value !== []),
+            ],
+            'rest' => [
+                'index_available' => $indexKnown,
+                'index_status' => is_numeric($restIndex['status'] ?? null) ? (int) $restIndex['status'] : null,
+                'route_count' => (int) ($restIndex['route_count'] ?? 0),
+                'namespaces' => $namespaces,
+                'endpoints' => $endpoints,
+            ],
+            'integrations' => [
+                'seo_plugin' => $rankMathAvailable ? 'rank_math' : ($yoastAvailable ? 'yoast' : ($indexKnown ? 'none_detected' : 'unknown')),
+                'rank_math_available' => $rankMathAvailable,
+                'yoast_available' => $yoastAvailable,
+                'acf_rest_available' => $indexKnown ? $acfAvailable : null,
+                'article_audio_available' => $indexKnown ? $articleAudioAvailable : null,
+                'custom_taxonomies' => array_values(array_diff($taxonomies, ['category', 'post_tag'])),
+            ],
+            'features' => $features,
+            'optional_features' => $optional,
+        ];
+
+        return $authentication + [
+            'connection_report' => $report,
+            'publication_features' => [
+                'mode' => $contract['mode'] ?? $mode,
+                'label' => $contract['label'] ?? $this->connectionLabel($target),
+                'features' => $features,
+                'optional' => $optional,
+            ],
+        ];
+    }
+
+    /** @param array<int, string> $namespaces */
+    private function hasNamespace(array $namespaces, string $prefix): bool
+    {
+        return collect($namespaces)->contains(
+            static fn (string $namespace): bool => str_starts_with(strtolower($namespace), strtolower($prefix)),
+        );
+    }
+
+    private function connectionConfigured(array $target): bool
+    {
+        if ($this->usesWpToolkit($target)) {
+            return $target['server'] instanceof WhmServer && ! empty($target['install_id']);
+        }
+
+        if ($this->usesPluginTransport($target)) {
+            return $target['url'] !== '' && $target['hws_key_id'] !== '' && $target['hws_api_secret'] !== '';
+        }
+
+        return $target['url'] !== '' && $target['username'] !== '' && $target['application_password'] !== '';
+    }
+
     private function pluginPublishingRoute(array $target, string $suffix = ""): string
     {
         $base = "hws-base-tools/v1/external-publishing";
