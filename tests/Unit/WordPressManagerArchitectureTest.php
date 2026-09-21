@@ -121,6 +121,26 @@ class WordPressManagerArchitectureTest extends TestCase
         $this->assertStringContainsString("catch (\\Throwable", $source);
     }
 
+    public function test_rest_finalization_binds_the_wordpress_generated_slug_before_final_readback(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $source = (string) file_get_contents(
+            $root.'/src/Services/Concerns/WordPressManager/VerifiesWordPressPostMutations.php'
+        );
+
+        $capture = strpos($source, "data_get(\$finalizeResponse, 'data.slug', '')");
+        $expected = strpos($source, "\$finalExpected['post_name'] = \$finalTransitionSlug;");
+        $compare = strpos($source, '$finalMismatches = $this->compareRestPostState(');
+
+        $this->assertNotFalse($capture);
+        $this->assertNotFalse($expected);
+        $this->assertNotFalse($compare);
+        $this->assertLessThan($expected, $capture);
+        $this->assertLessThan($compare, $expected);
+        $this->assertStringContainsString("trim((string) (\$stageState['post_name'] ?? '')) === ''", $source);
+        $this->assertStringContainsString("! in_array(\$requestedStatus, ['draft', 'pending', 'auto-draft'], true)", $source);
+    }
+
     public function test_bulk_user_inventory_carries_distinct_post_and_content_counts_with_real_roles(): void
     {
         $root = dirname(__DIR__, 2);

@@ -17,6 +17,31 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## CAMPAIGN-BUG-083 — REST finalization rejected WordPress's generated slug
+
+- **Severity:** High (prepared external articles could remain stranded as drafts)
+- **Status:** Patched 2026-09-21 04:23:00 EST in 2.0.78.
+- **Impact:** Her Forward HWS Base Tools operation 6878 completed preparation,
+  including three WordPress media uploads and featured media 57011. Resumed
+  publish operation 6877 then reverted post 57007 to draft because WordPress
+  generated its normal permalink slug during the final status transition.
+
+**Root cause.** WP Toolkit verification already predicts and binds the slug
+that core assigns when an empty-slug draft becomes public. The shared REST/HWS
+verifier instead carried the empty staging slug into final expectations, so its
+exact readback treated the valid generated slug as an unauthorized rewrite.
+
+**Patch.** When no slug was requested and an empty-slug REST draft enters a
+public/final state, the verifier binds the slug returned by that exact status
+mutation. Its independent final readback must preserve the same value
+byte-for-byte; supplied slugs and all other fields remain strictly verified.
+
+**Guard — do not remove.** Accept a WordPress-generated slug only for the exact
+empty-draft final-status transition. Never relax supplied-slug verification or
+skip the independent final readback.
+
+---
+
 ## CAMPAIGN-BUG-078 — HWS author identity omitted the real WordPress login
 
 - **Severity:** High (configured bridge authors could not be verified)

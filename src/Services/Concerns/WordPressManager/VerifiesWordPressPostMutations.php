@@ -907,6 +907,17 @@ PHP;
                     'data' => $state ? $this->formatVerifiedRestPostData($state, ['verified' => false, 'phase' => 'finalize_status', 'rollback' => $rollback]) : null,
                 ];
             }
+
+            if (! $has('slug')
+                && trim((string) ($stageState['post_name'] ?? '')) === ''
+                && ! in_array($requestedStatus, ['draft', 'pending', 'auto-draft'], true)) {
+                // CRITICAL — see laravel-hexa-package-wordpress BUGLOG.md
+                // CAMPAIGN-BUG-083. Core assigns the slug only when an empty-
+                // slug draft enters a public/final state. Bind the exact slug
+                // returned by that status mutation, then require the
+                // independent final readback to preserve it byte-for-byte.
+                $finalTransitionSlug = trim((string) data_get($finalizeResponse, 'data.slug', ''));
+            }
         }
 
         $finalResponse = $this->restRequest($target, 'get', $endpoint.'/'.$postId, [], ['context' => 'edit']);
@@ -914,6 +925,12 @@ PHP;
             ? $this->restPostSnapshot((array) $finalResponse['data'], $taxonomyFields)
             : null;
         [$finalExpected, $finalFields] = $this->expectedRestPostState($payload, $before, $requestedStatus, $taxonomyFields, $isCreate);
+        if (isset($finalTransitionSlug) && $finalTransitionSlug !== '') {
+            $finalExpected['post_name'] = $finalTransitionSlug;
+            if (! in_array('post_name', $finalFields, true)) {
+                $finalFields[] = 'post_name';
+            }
+        }
         $finalMismatches = $this->compareRestPostState($finalExpected, $finalState, $finalFields);
         if (! ($finalResponse['success'] ?? false)) {
             $finalMismatches['readback'] = ['expected' => 'successful context=edit response', 'actual' => (string) ($finalResponse['message'] ?? 'failed')];
