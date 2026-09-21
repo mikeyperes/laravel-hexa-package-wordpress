@@ -17,6 +17,30 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## CAMPAIGN-BUG-075 — REST field filtering erased the HWS author list
+
+- **Severity:** High (all HWS bridge campaign operations stopped before generation)
+- **Status:** Patched 2026-09-21 02:37:23 EST in 2.0.76.
+- **Impact:** Her Forward operation 6871 authenticated and reached the dedicated
+  author endpoint, but Publish received an empty author list. No article body,
+  AI charge, WordPress post or media was created.
+
+**Root cause.** The shared caller reused the native WordPress users query for
+the custom HWS authors route, including `_fields=id,name,slug,email,roles`.
+WordPress applied that filter to the custom route's top-level numeric list and
+removed every row, returning HTTP 200 with `[]` even though the endpoint found
+the site's users.
+
+**Patch.** HWS author discovery now removes `_fields` only after translating
+`users` to the custom signed `authors` route. Native Application Password
+author discovery keeps its core REST field filter, and all other bridge
+queries are unchanged.
+
+**Guard — do not remove.** Never send a top-level `_fields` filter to the HWS
+authors route unless that route first adopts a response schema on which the
+filter is explicitly supported. Native `/wp/v2/users` requests must retain the
+bounded field filter.
+
 ## CAMPAIGN-BUG-074 — HWS bridge author discovery used a protected core users path
 
 - **Severity:** High (all HWS bridge campaign operations stopped before generation)

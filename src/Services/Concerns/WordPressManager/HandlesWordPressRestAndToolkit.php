@@ -29,9 +29,16 @@ trait HandlesWordPressRestAndToolkit
             // CRITICAL — see BUGLOG.md CAMPAIGN-BUG-074.
             // Security layers can reject an outer route containing wp/v2/users
             // before HWS Base Tools authenticates the signed bridge request.
-            $bridgeSuffix = strtoupper($method) === 'GET' && $endpoint === 'users'
-                ? 'authors'
-                : 'wp/v2/'.$endpoint;
+            $isAuthorLookup = strtoupper($method) === 'GET' && $endpoint === 'users';
+            $bridgeSuffix = $isAuthorLookup ? 'authors' : 'wp/v2/'.$endpoint;
+
+            // CRITICAL — see BUGLOG.md CAMPAIGN-BUG-075.
+            // WordPress applies the REST `_fields` filter to a custom route's
+            // top-level response. The bridge author route returns a list, so
+            // filtering for author fields removes every numeric list item.
+            if ($isAuthorLookup) {
+                unset($query['_fields']);
+            }
 
             return $this->rest->signedRequestRoute(
                 $target["url"],

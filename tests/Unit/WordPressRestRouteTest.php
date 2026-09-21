@@ -24,7 +24,6 @@ class WordPressRestRouteTest extends TestCase
             [
                 'per_page' => 100,
                 'context' => 'edit',
-                '_fields' => 'id,name,slug,email,roles',
             ],
             60,
         )->willReturn([
@@ -51,6 +50,47 @@ class WordPressRestRouteTest extends TestCase
         $this->assertTrue($result['success']);
         $this->assertSame('hakhan96', $result['authors'][0]['user_login']);
         $this->assertSame(['author'], $result['authors'][0]['roles']);
+    }
+
+    public function test_native_rest_author_lookup_keeps_the_core_fields_filter(): void
+    {
+        $rest = $this->createMock(WordPressService::class);
+        $rest->expects($this->once())->method('request')->with(
+            'https://example.org',
+            'fixture',
+            'fixture-password',
+            'get',
+            'users',
+            [],
+            [
+                'per_page' => 100,
+                'context' => 'edit',
+                '_fields' => 'id,name,slug,email,roles',
+            ],
+            60,
+        )->willReturn([
+            'success' => true,
+            'status' => 200,
+            'message' => 'REST request succeeded.',
+            'data' => [[
+                'id' => 53,
+                'name' => 'Humza Khan',
+                'slug' => 'hakhan96',
+                'email' => 'author@example.org',
+                'roles' => ['author'],
+            ]],
+        ]);
+
+        $manager = new WordPressManagerService($this->createMock(WpToolkitService::class), $rest);
+        $result = $manager->listAuthors([
+            'mode' => 'rest',
+            'url' => 'https://example.org',
+            'username' => 'fixture',
+            'application_password' => 'fixture-password',
+        ], true);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('hakhan96', $result['authors'][0]['user_login']);
     }
 
     public function test_http_mode_uses_authenticated_namespaced_transport(): void
