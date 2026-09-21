@@ -19,7 +19,15 @@ class WordPressService
     /** @return array{success: bool, message: string, data: array|null} */
     public function testConnection(string $siteUrl, string $username, string $appPassword): array
     {
-        $result = $this->request($siteUrl, $username, $appPassword, 'get', 'users/me', timeoutSeconds: 15);
+        $result = $this->request(
+            $siteUrl,
+            $username,
+            $appPassword,
+            'get',
+            'users/me',
+            query: ['context' => 'edit'],
+            timeoutSeconds: 15,
+        );
         if ($result['success']) {
             $user = (array) $result['data'];
             $id = (int) ($user['id'] ?? 0);
