@@ -20,37 +20,55 @@ trait ManagesWordPressTaxonomies
             return $result;
         }
 
-        $response = $this->restRequest($target, "get", "users", [], [
-            "per_page" => 100,
-            "context" => "edit",
-            "_fields" => "id,name,slug,email,roles",
-        ]);
+        $authors = [];
+        $truncated = false;
+        for ($page = 1; $page <= 100; $page++) {
+            // CRITICAL — see BUGLOG.md CAMPAIGN-BUG-077. REST collections are
+            // capped at 100 rows, so every author page must be loaded before
+            // a configured campaign author can be declared missing.
+            $response = $this->restRequest($target, "get", "users", [], [
+                "per_page" => 100,
+                "page" => $page,
+                "context" => "edit",
+                "_fields" => "id,name,slug,email,roles",
+            ]);
 
-        if (!($response["success"] ?? false)) {
-            return [
-                "success" => false,
-                "message" => (string) ($response["message"] ?? "Author lookup failed."),
-                "authors" => [],
-                "cache_hit" => null,
-                "cached_at" => null,
-                "expires_at" => null,
-            ];
+            if (!($response["success"] ?? false)) {
+                return [
+                    "success" => false,
+                    "message" => (string) ($response["message"] ?? "Author lookup failed."),
+                    "authors" => [],
+                    "cache_hit" => null,
+                    "cached_at" => null,
+                    "expires_at" => null,
+                ];
+            }
+
+            $pageRows = array_values(array_filter((array) ($response["data"] ?? []), "is_array"));
+            foreach ($pageRows as $author) {
+                $normalized = [
+                    "id" => (int) ($author["id"] ?? 0),
+                    "user_login" => (string) ($author["login"] ?? $author["user_login"] ?? $author["slug"] ?? ""),
+                    "slug" => (string) ($author["slug"] ?? ""),
+                    "display_name" => (string) ($author["name"] ?? $author["slug"] ?? ""),
+                    "email" => (string) ($author["email"] ?? ""),
+                    "roles" => array_values(array_map("strval", (array) ($author["roles"] ?? []))),
+                ];
+                $authors[$normalized["id"] > 0 ? (string) $normalized["id"] : "page-{$page}-".count($authors)] = $normalized;
+            }
+
+            if (count($pageRows) < 100) {
+                break;
+            }
+            $truncated = $page === 100;
         }
-
-        $authors = array_map(static function (array $author): array {
-            return [
-                "id" => (int) ($author["id"] ?? 0),
-                "user_login" => (string) ($author["slug"] ?? ""),
-                "display_name" => (string) ($author["name"] ?? $author["slug"] ?? ""),
-                "email" => (string) ($author["email"] ?? ""),
-                "roles" => array_values(array_map("strval", (array) ($author["roles"] ?? []))),
-            ];
-        }, array_values(array_filter((array) ($response["data"] ?? []), "is_array")));
+        $authors = array_values($authors);
 
         return [
             "success" => true,
-            "message" => count($authors) . " author(s) loaded via REST.",
+            "message" => count($authors) . " author(s) loaded via REST" . ($truncated ? " (bounded at 10,000)." : "."),
             "authors" => $authors,
+            "truncated" => $truncated,
             "cache_hit" => null,
             "cached_at" => null,
             "expires_at" => null,

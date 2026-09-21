@@ -23,6 +23,7 @@ class WordPressRestRouteTest extends TestCase
             [],
             [
                 'per_page' => 100,
+                'page' => 1,
                 'context' => 'edit',
             ],
             60,
@@ -32,6 +33,7 @@ class WordPressRestRouteTest extends TestCase
             'message' => 'Signed plugin request succeeded.',
             'data' => [[
                 'id' => 53,
+                'login' => 'actual-login',
                 'name' => 'Humza Khan',
                 'slug' => 'hakhan96',
                 'email' => 'author@example.org',
@@ -48,7 +50,8 @@ class WordPressRestRouteTest extends TestCase
         ], true);
 
         $this->assertTrue($result['success']);
-        $this->assertSame('hakhan96', $result['authors'][0]['user_login']);
+        $this->assertSame('actual-login', $result['authors'][0]['user_login']);
+        $this->assertSame('hakhan96', $result['authors'][0]['slug']);
         $this->assertSame(['author'], $result['authors'][0]['roles']);
     }
 
@@ -64,6 +67,7 @@ class WordPressRestRouteTest extends TestCase
             [],
             [
                 'per_page' => 100,
+                'page' => 1,
                 'context' => 'edit',
                 '_fields' => 'id,name,slug,email,roles',
             ],
@@ -91,6 +95,67 @@ class WordPressRestRouteTest extends TestCase
 
         $this->assertTrue($result['success']);
         $this->assertSame('hakhan96', $result['authors'][0]['user_login']);
+    }
+
+    public function test_external_author_lookup_loads_every_rest_page(): void
+    {
+        $firstPage = [];
+        for ($id = 1; $id <= 100; $id++) {
+            $firstPage[] = [
+                'id' => $id,
+                'name' => 'Author '.$id,
+                'slug' => 'author-'.$id,
+                'email' => 'author-'.$id.'@example.org',
+                'roles' => ['author'],
+            ];
+        }
+        $secondPage = [[
+            'id' => 101,
+            'login' => 'configured-login',
+            'name' => 'Configured Author',
+            'slug' => 'configured-author',
+            'email' => 'configured@example.org',
+            'roles' => ['editor'],
+        ]];
+        $requestedPages = [];
+
+        $rest = $this->createMock(WordPressService::class);
+        $rest->expects($this->exactly(2))
+            ->method('signedRequestRoute')
+            ->willReturnCallback(function (
+                string $siteUrl,
+                string $keyId,
+                string $secret,
+                string $method,
+                string $endpoint,
+                array $body,
+                array $query,
+                int $timeout,
+            ) use (&$requestedPages, $firstPage, $secondPage): array {
+                $requestedPages[] = $query['page'] ?? null;
+
+                return [
+                    'success' => true,
+                    'status' => 200,
+                    'message' => 'Signed plugin request succeeded.',
+                    'data' => ($query['page'] ?? 1) === 1 ? $firstPage : $secondPage,
+                ];
+            });
+
+        $manager = new WordPressManagerService($this->createMock(WpToolkitService::class), $rest);
+        $result = $manager->listAuthors([
+            'mode' => 'hws_base_tools',
+            'url' => 'https://example.org',
+            'hws_key_id' => 'hws_0123456789abcdef01234567',
+            'hws_api_secret' => str_repeat('s', 64),
+        ], true);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame([1, 2], $requestedPages);
+        $this->assertCount(101, $result['authors']);
+        $this->assertSame('configured-login', $result['authors'][100]['user_login']);
+        $this->assertSame('configured-author', $result['authors'][100]['slug']);
+        $this->assertFalse($result['truncated']);
     }
 
     public function test_http_mode_uses_authenticated_namespaced_transport(): void

@@ -17,6 +17,47 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## CAMPAIGN-BUG-078 — HWS author identity omitted the real WordPress login
+
+- **Severity:** High (configured bridge authors could not be verified)
+- **Status:** Patched 2026-09-21 02:47:53 EST in 2.0.77 and HWS Base Tools 13.2.20.
+- **Impact:** Her Forward's complete 136-user HWS directory contained actor ID
+  9, but Publish could not match the campaign's configured WordPress login
+  because that account's nicename differs from its login.
+
+**Root cause.** The signed plugin directory returned `slug` from
+`user_nicename` and the package relabeled that value as `user_login`. The real
+login was omitted despite the route already requiring HMAC authentication and
+the administrator `list_users` capability.
+
+**Patch.** HWS Base Tools now returns `login` explicitly. The package prefers
+that field, retains the nicename separately as `slug`, and keeps slug fallback
+for native core REST responses that do not expose WordPress logins.
+
+**Guard — do not remove.** Never relabel a WordPress nicename as a login when
+the selected transport supplies both. Keep native REST slug compatibility.
+
+## CAMPAIGN-BUG-077 — REST author discovery stopped after the first 100 users
+
+- **Severity:** High (configured campaign authors outside page 1 could not publish)
+- **Status:** Patched 2026-09-21 02:45:15 EST in 2.0.77.
+- **Impact:** Her Forward's HWS bridge returned 100 valid authors, but the site
+  has 136 users and the selected campaign author was outside the first page.
+  Campaign integrity therefore stopped operation 6871 before generation.
+
+**Root cause.** WP Toolkit author inventory already loaded the complete bounded
+directory, while native REST and HWS Base Tools requested only the first
+100-row WordPress REST page and treated it as complete.
+
+**Patch.** Both external transports now traverse consecutive 100-row author
+pages until the final partial page, deduplicate by WordPress user ID and stop
+at the existing 10,000-user safety bound. A page failure fails the lookup
+instead of returning a misleading partial directory.
+
+**Guard — do not remove.** A REST-backed author may not be declared absent from
+page 1 alone. Native Application Password and HWS bridge discovery must share
+the same bounded pagination behavior.
+
 ## CAMPAIGN-BUG-075 — REST field filtering erased the HWS author list
 
 - **Severity:** High (all HWS bridge campaign operations stopped before generation)
