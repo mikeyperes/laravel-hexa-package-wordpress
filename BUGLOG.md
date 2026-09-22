@@ -17,6 +17,31 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## CAMPAIGN-BUG-089 — Connection reports confused transport with SMP features
+
+- **Severity:** High (campaigns could generate and deliver unsupported metadata)
+- **Status:** Patched 2026-09-21 20:44:19 EST in 2.0.81.
+- **Impact:** Publish inferred Summary and FAQ support from a generic ACF REST
+  namespace, inferred article taxonomy and audio from unrelated REST surfaces,
+  and did not verify the SMP plugin manifest independently of WP Toolkit,
+  native REST, or HWS Base Tools. Test Connection also returned only after all
+  probes finished, leaving operators without live progress or a durable trace.
+
+**Root cause.** Connection transport and publication-plugin capabilities were
+modeled as one feature contract. The connector had no bounded SMP manifest
+probe and no normalized capability snapshot for campaigns to consume.
+
+**Patch.** Every connection mode now probes the public SMP manifest, validates
+its identity, records explicit booleans for SMP, Summary, FAQ, Article Types,
+audio, and Rank Math, and emits a secret-free activity event for each stage.
+The completed activity log is embedded in the persisted connection report.
+
+**Guard — do not remove.** Hosting and transport never prove SMP support. A
+missing, invalid, or false manifest capability remains false, while ordinary
+WordPress publishing stays available when its own transport is healthy.
+
+---
+
 ## CAMPAIGN-BUG-083 — REST finalization rejected WordPress's generated slug
 
 - **Severity:** High (prepared external articles could remain stranded as drafts)

@@ -507,6 +507,81 @@ class WordPressService
         }
     }
 
+    /**
+     * Read the public SMP publication manifest without coupling it to the
+     * selected WordPress authentication or hosting transport.
+     *
+     * @return array{success: bool, message: string, status: int|null, state: string, data: array|null}
+     */
+    public function discoverPublicationManifest(string $siteUrl): array
+    {
+        $url = rtrim(trim($siteUrl), '/').'/wp-json/smpi/v1/publication-manifest';
+        $validatedUrl = $this->validatedPublicUrl($url);
+        if ($validatedUrl === null) {
+            return [
+                'success' => false,
+                'message' => 'The SMP publication manifest URL is invalid.',
+                'status' => null,
+                'state' => 'invalid_url',
+                'data' => null,
+            ];
+        }
+
+        try {
+            $response = $this->http->publicGet(
+                $validatedUrl,
+                ['_publish_connection_check' => 1],
+                ['Accept' => 'application/json'],
+                20,
+                4 * 1024 * 1024,
+                4,
+            );
+            if (! $response->successful()) {
+                return [
+                    'success' => false,
+                    'message' => $response->status === 404
+                        ? 'SMP Publication Integration manifest was not detected.'
+                        : 'SMP publication manifest returned HTTP '.$response->status.'.',
+                    'status' => $response->status,
+                    'state' => $response->status === 404 ? 'not_detected' : 'http_error',
+                    'data' => null,
+                ];
+            }
+
+            $contentType = strtolower(implode(', ', $response->headerValues('content-type')));
+            $payload = $response->json();
+            if ((! str_contains($contentType, 'application/json') && ! str_contains($contentType, '+json'))
+                || ! is_array($payload)
+                || array_is_list($payload)) {
+                return [
+                    'success' => false,
+                    'message' => 'SMP publication manifest returned an invalid JSON document.',
+                    'status' => $response->status,
+                    'state' => 'invalid_payload',
+                    'data' => null,
+                ];
+            }
+
+            return [
+                'success' => true,
+                'message' => 'SMP publication manifest discovered.',
+                'status' => $response->status,
+                'state' => 'available',
+                'data' => $payload,
+            ];
+        } catch (Throwable $exception) {
+            $this->logFailure('discoverPublicationManifest', $siteUrl, $exception);
+
+            return [
+                'success' => false,
+                'message' => 'The SMP publication manifest could not be reached securely.',
+                'status' => null,
+                'state' => 'transport_error',
+                'data' => null,
+            ];
+        }
+    }
+
     /** @return array{success: bool, message: string, data: array|null} */
     public function getCategories(string $siteUrl, string $username, string $appPassword): array
     {
