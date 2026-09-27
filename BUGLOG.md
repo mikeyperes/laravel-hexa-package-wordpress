@@ -17,6 +17,42 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## JOURNALIST-BUG-002 — Journalist snapshots stored WordPress login sessions and API password hashes
+
+- **Severity:** High (security)
+- **Status:** Fixed in 2.0.84, 2026-09-27 18:04:31 EST.
+- **Symptom:** Stored journalist snapshots (`profile_publication_user_links.wp_snapshot`)
+  contained `session_tokens` and `_application_passwords` user meta.
+- **Impact:** WordPress login-session identifiers and hashed Application
+  Passwords for connected authors were copied into the Publish database each
+  time a journalist panel was opened. Two rows were affected at the time of the
+  fix (links 86 and 1625).
+- **Root cause:** `getUserProfile()` merged every user meta row from
+  `wp user meta list` into the returned profile, and callers persisted it.
+- **Patch:** The single-bootstrap profile reader skips credential meta inside
+  WordPress, so it never reaches Publish. Existing rows were scrubbed.
+- **Guard:** `protectedUserMetaKeys()` in `ManagesWordPressUsersAndMeta`;
+  `WordPressUserProfileReadTest::test_credential_meta_is_excluded_inside_wordpress`.
+
+## JOURNALIST-BUG-001 — Opening one journalist took 30-45 seconds
+
+- **Severity:** High
+- **Status:** Fixed in 2.0.84 with laravel-hexa-package-wptoolkit 3.3.8, 2026-09-27 18:04:31 EST.
+- **Symptom:** The journalist panel showed "Loading fields" for about 42
+  seconds; `/profiles/journalists/links/{link}/field-bridge` took 42.2 s.
+- **Root cause:** `getUserProfile()` reloaded the entire user inventory of the
+  site (every user with avatars and post counts; 1,078 users on Financial Tech
+  Times) to return one user, then made separate WP-CLI round trips for user
+  meta, the avatar provider and the legacy avatar URL. Each round trip also
+  paid WP Toolkit setup costs that were never reused between requests.
+- **Patch:** One WordPress bootstrap returns the requested user's row, meta,
+  legacy avatar URL and avatar provider (`loadToolkitUserProfile()`). The row
+  PHP is shared with the full inventory (`toolkitUserRowsPhp()`), so both
+  return identical shapes. Output matched the previous reader field for field
+  (393 fields for Her Forward user 2).
+- **Guard:** `WordPressUserProfileReadTest` requires exactly one evaluation,
+  scoped to the requested user.
+
 ## CAMPAIGN-BUG-136 — The manifest probe hung on Cloudflare for every hosted site
 
 - **Severity:** High

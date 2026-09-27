@@ -15,19 +15,21 @@ trait ManagesWordPressUsersAndMeta
         $target = $this->normalizeTarget($target);
         if ($userId <= 0) return ["success" => false, "message" => "User ID is required.", "data" => []];
 
-        $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1, "force_refresh" => $forceRefresh]);
-        if (!($users["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($users["message"] ?? "User lookup failed."), "data" => []];
-        }
-
-        $data = is_array($users["users"][0] ?? null) ? $users["users"][0] : [];
-        if ($data === []) {
-            return ["success" => false, "message" => "WordPress user #" . $userId . " was not found.", "data" => []];
-        }
-
+        $provider = null;
         if ($this->usesWpToolkit($target)) {
-            $meta = $this->wptoolkit->wpCliRaw($target["server"], (int) $target["install_id"], "user meta list " . $userId . " --format=json");
-            foreach ((array) (json_decode((string) ($meta["stdout"] ?? "[]"), true) ?: []) as $row) {
+            // One WordPress bootstrap returns the user row, its meta, the legacy
+            // avatar URL and the avatar provider. See BUGLOG.md JOURNALIST-BUG-001:
+            // this used to reload every user on the site plus three more
+            // wp-cli round trips, taking 30-45 seconds per journalist.
+            $loaded = $this->loadToolkitUserProfile($target, $userId);
+            if (!($loaded["success"] ?? false)) {
+                return ["success" => false, "message" => (string) ($loaded["message"] ?? "User lookup failed."), "data" => []];
+            }
+            $data = (array) ($loaded["user"] ?? []);
+            if ($data === []) {
+                return ["success" => false, "message" => "WordPress user #" . $userId . " was not found.", "data" => []];
+            }
+            foreach ((array) ($loaded["meta"] ?? []) as $row) {
                 if (is_array($row)) $data[(string) ($row["meta_key"] ?? "")] = (string) ($row["meta_value"] ?? "");
             }
             if (empty($data["avatar_url"]) && !empty($data["simple_local_avatar"])) {
@@ -46,11 +48,20 @@ trait ManagesWordPressUsersAndMeta
                 $this->extractUserAvatarMediaId($data["simple_local_avatar"] ?? "")
                 ?: ($data["wp_user_avatar"] ?? "")
             );
-            if (empty($data["avatar_url"]) && !empty($data["wp_user_avatar"])) {
-                $url = $this->wpCliAttachmentUrl($target, (int) $data["wp_user_avatar"]);
-                if ($url !== "") {
-                    $data["avatar_url"] = $url;
-                }
+            $legacyAvatarUrl = (string) ($loaded["legacy_avatar_url"] ?? "");
+            if (empty($data["avatar_url"]) && !empty($data["wp_user_avatar"]) && filter_var($legacyAvatarUrl, FILTER_VALIDATE_URL)) {
+                $data["avatar_url"] = $legacyAvatarUrl;
+            }
+            $provider = (string) ($loaded["avatar_provider"] ?? "");
+        } else {
+            $users = $this->listUsers($target, ["include" => [$userId], "per_page" => 1, "force_refresh" => $forceRefresh]);
+            if (!($users["success"] ?? false)) {
+                return ["success" => false, "message" => (string) ($users["message"] ?? "User lookup failed."), "data" => []];
+            }
+
+            $data = is_array($users["users"][0] ?? null) ? $users["users"][0] : [];
+            if ($data === []) {
+                return ["success" => false, "message" => "WordPress user #" . $userId . " was not found.", "data" => []];
             }
         }
         $avatarPayload = ($data["simple_local_avatar"] ?? null)
@@ -72,7 +83,7 @@ trait ManagesWordPressUsersAndMeta
         }
         $data = $this->normalizeUserAvatarForProvider(
             $data,
-            $this->activeUserAvatarProvider($target, $forceRefresh),
+            $provider !== null && $provider !== "" ? $provider : $this->activeUserAvatarProvider($target, $forceRefresh),
         );
         $data["ID"] = (string) $userId;
         if (empty($data["wp_admin_url"])) {
@@ -621,5 +632,67 @@ trait ManagesWordPressUsersAndMeta
         return $write;
     }
 
+    /**
+     * Load one WordPress user through a single WP Toolkit bootstrap.
+     *
+     * @return array{success: bool, message?: string, user?: array<string, mixed>, meta?: array<int, array{meta_key: string, meta_value: string}>, legacy_avatar_url?: string, avatar_provider?: string}
+     */
+    private function loadToolkitUserProfile(array $target, int $userId): array
+    {
+        $result = $this->evaluatePhp($target, $this->toolkitUserProfilePhp($userId));
+        if (!($result["success"] ?? false)) {
+            return ["success" => false, "message" => (string) ($result["message"] ?? "User lookup failed.")];
+        }
 
+        $payload = $this->decodeMarkedPayload((string) ($result["stdout"] ?? ""), "HEXA_USER_PROFILE:");
+        if (!is_array($payload)) {
+            return ["success" => false, "message" => "Failed to parse the WordPress user profile output."];
+        }
+
+        $provider = (string) ($payload["avatar_provider"] ?? "") ?: "legacy_avatar_meta";
+        try {
+            // Reused by activeUserAvatarProvider() so later writes skip a probe.
+            Cache::put($this->toolkitCacheBase($target, "avatar-provider"), $provider, 600);
+        } catch (\Throwable) {
+            // Caching the provider is an optimisation only.
+        }
+
+        $row = is_array($payload["rows"][0] ?? null) ? $payload["rows"][0] : null;
+        $user = $row === null ? [] : $this->normalizeUserAvatarForProvider($this->normalizeUserRow($row), $provider);
+
+        return [
+            "success" => true,
+            "user" => $user,
+            "meta" => array_values(array_filter((array) ($payload["meta"] ?? []), "is_array")),
+            "legacy_avatar_url" => (string) ($payload["legacy_avatar_url"] ?? ""),
+            "avatar_provider" => $provider,
+        ];
+    }
+
+    private function toolkitUserProfilePhp(int $userId): string
+    {
+        $afterRows = implode("", [
+            '$meta=[];',
+            '$protectedMeta=' . var_export($this->protectedUserMetaKeys(), true) . ';',
+            'foreach ((array) get_user_meta(' . $userId . ') as $metaKey=>$metaValues) { if (in_array((string) $metaKey, $protectedMeta, true)) { continue; } foreach ((array) $metaValues as $metaValue) { $meta[]=["meta_key"=>(string) $metaKey,"meta_value"=>is_scalar($metaValue) ? (string) $metaValue : maybe_serialize($metaValue)]; } }',
+            '$legacyAvatarId=(int) get_user_meta(' . $userId . ',"wp_user_avatar",true);',
+            '$legacyAvatarUrl=$legacyAvatarId>0 ? (string) wp_get_attachment_url($legacyAvatarId) : "";',
+            'if ($legacyAvatarUrl==="" && $legacyAvatarId>0) { $legacyAvatarUrl=(string) get_post_field("guid",$legacyAvatarId); }',
+            $this->simpleLocalAvatarRuntimePhp(),
+            'echo "HEXA_USER_PROFILE:" . wp_json_encode(["rows"=>$rows,"meta"=>$meta,"legacy_avatar_url"=>$legacyAvatarUrl,"avatar_provider"=>$provider]);',
+        ]);
+
+        return $this->toolkitUserRowsPhp([$userId], $afterRows);
+    }
+
+    /**
+     * User meta holding WordPress login or API credentials. It is never read
+     * into Publish or stored in a snapshot. See BUGLOG.md JOURNALIST-BUG-002.
+     *
+     * @return array<int, string>
+     */
+    protected function protectedUserMetaKeys(): array
+    {
+        return ["session_tokens", "_application_passwords"];
+    }
 }

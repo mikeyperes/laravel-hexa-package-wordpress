@@ -494,45 +494,7 @@ PHP;
 
         if ($this->usesWpToolkit($target)) {
             $loader = function () use ($target): array {
-                $parts = [
-                    'global $wpdb;',
-                    '$args=["fields"=>"all","number"=>9999];',
-                    '$users=get_users($args);',
-                    '$contentCounts=[];',
-                    '$contentRows=$wpdb->get_results("SELECT post_author, COUNT(*) AS content_count FROM {$wpdb->posts} WHERE post_type NOT IN (\'revision\',\'nav_menu_item\') GROUP BY post_author",ARRAY_A);',
-                    'foreach ((array) $contentRows as $contentRow) { $authorId=(int) ($contentRow["post_author"] ?? 0); if ($authorId>0) { $contentCounts[$authorId]=(int) ($contentRow["content_count"] ?? 0); } }',
-                    '$rows=[];',
-                    'foreach ($users as $user) {',
-                    '$simpleAvatarPayload=get_user_meta($user->ID,"simple_local_avatar",true);',
-                    '$legacyAvatarPayload=get_user_meta($user->ID,"wp_user_avatars",true);',
-                    '$avatarId=0;',
-                    'if (is_array($simpleAvatarPayload) && !empty($simpleAvatarPayload["media_id"])) { $avatarId=(int) $simpleAvatarPayload["media_id"]; }',
-                    'if ($avatarId<=0) { $avatarId=(int) get_user_meta($user->ID,"wp_user_avatar",true); }',
-                    '$avatarPayload=$simpleAvatarPayload ?: $legacyAvatarPayload;',
-                    '$avatarUrls=[];',
-                    'if (is_array($avatarPayload)) { foreach ($avatarPayload as $key=>$value) { if (is_string($value) && filter_var($value,FILTER_VALIDATE_URL)) { $avatarUrls[(string) $key]=$value; } } }',
-                    '$avatarFullUrl=(string) ($avatarUrls["full"] ?? $avatarUrls["original"] ?? "");',
-                    '$numericAvatarUrls=[];',
-                    'foreach ($avatarUrls as $key=>$value) { if (ctype_digit((string) $key)) { $numericAvatarUrls[(int) $key]=$value; } }',
-                    'ksort($numericAvatarUrls,SORT_NUMERIC);',
-                    '$avatarUrl="";',
-                    'foreach ($numericAvatarUrls as $size=>$value) { if ($size>=224) { $avatarUrl=$value; break; } }',
-                    'if ($avatarUrl==="" && $numericAvatarUrls!==[]) { $avatarUrl=(string) end($numericAvatarUrls); }',
-                    'if ($avatarUrl==="" && !empty($avatarUrls["thumbnail"])) { $avatarUrl=(string) $avatarUrls["thumbnail"]; }',
-                    'if ($avatarUrl==="" && $avatarId>0) { $avatarUrl=(string) wp_get_attachment_image_url($avatarId,"medium"); }',
-                    'if ($avatarUrl==="" && $avatarId>0) { $maybeAvatar=(string) get_avatar_url($user->ID, ["size"=>96]); if (strpos($maybeAvatar, "wp-content/uploads/") !== false) { $avatarUrl=$maybeAvatar; } }',
-                    'if ($avatarFullUrl==="" && $avatarId>0) { $avatarFullUrl=(string) wp_get_attachment_url($avatarId); }',
-                    'if ($avatarFullUrl==="") { $avatarFullUrl=$avatarUrl; }',
-                    '$authorUrl=(string) get_author_posts_url($user->ID,(string) $user->user_nicename);',
-                    '$adminUrl=(string) get_edit_user_link($user->ID);',
-                    'if ($adminUrl==="") { $adminUrl=(string) admin_url("user-edit.php?user_id=" . (int) $user->ID); }',
-                    '$postCount=(int) count_user_posts((int) $user->ID,"post",false);',
-                    '$contentCount=(int) ($contentCounts[(int) $user->ID] ?? 0);',
-                    '$rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"user_nicename"=>(string) $user->user_nicename,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"user_url"=>(string) $user->user_url,"roles"=>array_values(array_map("strval", (array) $user->roles)),"wp_user_avatar"=>$avatarId>0 ? (string) $avatarId : "","avatar_media_id"=>$avatarId>0 ? (string) $avatarId : "","wp_user_avatars"=>is_scalar($legacyAvatarPayload) ? (string) $legacyAvatarPayload : maybe_serialize($legacyAvatarPayload),"simple_local_avatar"=>is_scalar($simpleAvatarPayload) ? (string) $simpleAvatarPayload : maybe_serialize($simpleAvatarPayload),"avatar_url"=>$avatarUrl,"avatar_thumbnail_url"=>$avatarUrl,"avatar_full_url"=>$avatarFullUrl,"avatar_sizes"=>$numericAvatarUrls,"author_url"=>$authorUrl,"wp_admin_url"=>$adminUrl,"post_count"=>$postCount,"post_count_known"=>true,"content_count"=>$contentCount,"content_count_known"=>true];',
-                    '}',
-                    'echo "HEXA_USER_LIST:" . wp_json_encode($rows);',
-                ];
-                $eval = $this->evaluatePhp($target, implode("", $parts));
+                $eval = $this->evaluatePhp($target, $this->toolkitUserRowsPhp());
                 if (!($eval["success"] ?? false)) {
                     return ["success" => false, "message" => (string) ($eval["message"] ?? "User lookup failed."), "users" => []];
                 }
@@ -714,5 +676,60 @@ PHP;
         }
 
         return ["success" => true, "message" => "User updated via REST.", "user" => $this->normalizeUserRow((array) ($response["data"] ?? []))];
+    }
+
+    /**
+     * PHP evaluated inside WordPress to build normalized user rows.
+     *
+     * One definition serves the full inventory and the single-user profile
+     * read, so both return identical row shapes. An empty include list loads
+     * every user; otherwise only the listed IDs are queried.
+     *
+     * @param array<int, int> $includeIds
+     */
+    private function toolkitUserRowsPhp(array $includeIds = [], string $afterRows = 'echo "HEXA_USER_LIST:" . wp_json_encode($rows);'): string
+    {
+        $includeIds = array_values(array_unique(array_filter(array_map("intval", $includeIds), static fn (int $id): bool => $id > 0)));
+        $includeArgs = $includeIds === [] ? '' : '$args["include"]=[' . implode(",", $includeIds) . '];';
+        $authorFilter = $includeIds === [] ? '' : ' AND post_author IN (' . implode(",", $includeIds) . ')';
+
+        return implode("", [
+            'global $wpdb;',
+            '$args=["fields"=>"all","number"=>9999];' . $includeArgs,
+            '$users=get_users($args);',
+            '$contentCounts=[];',
+            '$contentRows=$wpdb->get_results("SELECT post_author, COUNT(*) AS content_count FROM {$wpdb->posts} WHERE post_type NOT IN (\'revision\',\'nav_menu_item\')' . $authorFilter . ' GROUP BY post_author",ARRAY_A);',
+            'foreach ((array) $contentRows as $contentRow) { $authorId=(int) ($contentRow["post_author"] ?? 0); if ($authorId>0) { $contentCounts[$authorId]=(int) ($contentRow["content_count"] ?? 0); } }',
+            '$rows=[];',
+            'foreach ($users as $user) {',
+            '$simpleAvatarPayload=get_user_meta($user->ID,"simple_local_avatar",true);',
+            '$legacyAvatarPayload=get_user_meta($user->ID,"wp_user_avatars",true);',
+            '$avatarId=0;',
+            'if (is_array($simpleAvatarPayload) && !empty($simpleAvatarPayload["media_id"])) { $avatarId=(int) $simpleAvatarPayload["media_id"]; }',
+            'if ($avatarId<=0) { $avatarId=(int) get_user_meta($user->ID,"wp_user_avatar",true); }',
+            '$avatarPayload=$simpleAvatarPayload ?: $legacyAvatarPayload;',
+            '$avatarUrls=[];',
+            'if (is_array($avatarPayload)) { foreach ($avatarPayload as $key=>$value) { if (is_string($value) && filter_var($value,FILTER_VALIDATE_URL)) { $avatarUrls[(string) $key]=$value; } } }',
+            '$avatarFullUrl=(string) ($avatarUrls["full"] ?? $avatarUrls["original"] ?? "");',
+            '$numericAvatarUrls=[];',
+            'foreach ($avatarUrls as $key=>$value) { if (ctype_digit((string) $key)) { $numericAvatarUrls[(int) $key]=$value; } }',
+            'ksort($numericAvatarUrls,SORT_NUMERIC);',
+            '$avatarUrl="";',
+            'foreach ($numericAvatarUrls as $size=>$value) { if ($size>=224) { $avatarUrl=$value; break; } }',
+            'if ($avatarUrl==="" && $numericAvatarUrls!==[]) { $avatarUrl=(string) end($numericAvatarUrls); }',
+            'if ($avatarUrl==="" && !empty($avatarUrls["thumbnail"])) { $avatarUrl=(string) $avatarUrls["thumbnail"]; }',
+            'if ($avatarUrl==="" && $avatarId>0) { $avatarUrl=(string) wp_get_attachment_image_url($avatarId,"medium"); }',
+            'if ($avatarUrl==="" && $avatarId>0) { $maybeAvatar=(string) get_avatar_url($user->ID, ["size"=>96]); if (strpos($maybeAvatar, "wp-content/uploads/") !== false) { $avatarUrl=$maybeAvatar; } }',
+            'if ($avatarFullUrl==="" && $avatarId>0) { $avatarFullUrl=(string) wp_get_attachment_url($avatarId); }',
+            'if ($avatarFullUrl==="") { $avatarFullUrl=$avatarUrl; }',
+            '$authorUrl=(string) get_author_posts_url($user->ID,(string) $user->user_nicename);',
+            '$adminUrl=(string) get_edit_user_link($user->ID);',
+            'if ($adminUrl==="") { $adminUrl=(string) admin_url("user-edit.php?user_id=" . (int) $user->ID); }',
+            '$postCount=(int) count_user_posts((int) $user->ID,"post",false);',
+            '$contentCount=(int) ($contentCounts[(int) $user->ID] ?? 0);',
+            '$rows[]=["id"=>(int) $user->ID,"ID"=>(int) $user->ID,"user_login"=>(string) $user->user_login,"user_nicename"=>(string) $user->user_nicename,"display_name"=>(string) $user->display_name,"user_email"=>(string) $user->user_email,"user_url"=>(string) $user->user_url,"roles"=>array_values(array_map("strval", (array) $user->roles)),"wp_user_avatar"=>$avatarId>0 ? (string) $avatarId : "","avatar_media_id"=>$avatarId>0 ? (string) $avatarId : "","wp_user_avatars"=>is_scalar($legacyAvatarPayload) ? (string) $legacyAvatarPayload : maybe_serialize($legacyAvatarPayload),"simple_local_avatar"=>is_scalar($simpleAvatarPayload) ? (string) $simpleAvatarPayload : maybe_serialize($simpleAvatarPayload),"avatar_url"=>$avatarUrl,"avatar_thumbnail_url"=>$avatarUrl,"avatar_full_url"=>$avatarFullUrl,"avatar_sizes"=>$numericAvatarUrls,"author_url"=>$authorUrl,"wp_admin_url"=>$adminUrl,"post_count"=>$postCount,"post_count_known"=>true,"content_count"=>$contentCount,"content_count_known"=>true];',
+            '}',
+            $afterRows,
+        ]);
     }
 }
