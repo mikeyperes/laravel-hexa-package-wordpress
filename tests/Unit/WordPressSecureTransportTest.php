@@ -529,7 +529,7 @@ class WordPressSecureTransportTest extends TestCase
         $this->assertSame([['id' => 2, 'name' => 'News', 'slug' => 'news', 'count' => 4]], $categories['data']);
         $this->assertSame([['id' => 3, 'name' => 'Local', 'slug' => 'local', 'count' => 5]], $tags['data']);
         $this->assertCount(3, $requests);
-        $this->assertStringEndsWith('/users/me', $requests[0]->target->url);
+        $this->assertStringContainsString('/users/me?context=edit', $requests[0]->target->url);
         $this->assertStringContainsString('per_page=100', $requests[1]->target->url);
     }
 

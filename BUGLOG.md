@@ -17,6 +17,21 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## CAMPAIGN-BUG-136 — The manifest probe hung on Cloudflare for every hosted site
+
+- **Severity:** High
+- **Status:** Fixed in 2.0.83, 2026-09-27 03:55:14 EST (with laravel-hexa-app-publish 18.27.0).
+- **Symptom:** Campaign rescans failed with "the manifest request failed" while
+  the same site answered from the origin and from WP-CLI.
+- **Root cause:** the manifest was fetched over public HTTPS. Cloudflare does
+  not answer uncached requests that start on this server.
+- **Patch:** `WordPressManagerService::publicationManifest()` is the one
+  reader. WP Toolkit sites answer in-process through `rest_do_request` over
+  WP-CLI; external sites use REST. `connectionReport()` uses it too.
+- **Guard:** `tests/Unit/WordPressPublicationManifestTest.php`.
+
+---
+
 ## CAMPAIGN-BUG-126 — The WordPress host fetched caller-supplied image URLs
 
 - **Severity:** High (security)
