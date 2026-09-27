@@ -4,6 +4,19 @@ Permanent record of critical and high-severity article campaign bugs involving
 WordPress delivery and verification in this package. Bug IDs are shared with the
 [laravel-hexa-app-publish BUGLOG](https://github.com/mikeyperes/laravel-hexa-app-publish/blob/main/BUGLOG.md).
 
+## Rules for every contributor and AI agent
+
+1. Read this file before changing post creation, update, staging, readback or
+   rollback code.
+2. Code marked `CRITICAL — see ... BUGLOG.md CAMPAIGN-BUG-NNN` is a regression
+   guard. Do not remove or "simplify" it; a refactor that moves it must keep the
+   behavior and update the entry in the same commit.
+3. Log every new critical or high-severity delivery bug here in the same commit
+   as its patch, with the bug ID in the commit message. Never delete an entry.
+4. Timestamps are EST (UTC−05:00).
+
+---
+
 ## CAMPAIGN-BUG-126 — The WordPress host fetched caller-supplied image URLs
 
 - **Severity:** High (security)
@@ -20,19 +33,6 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
   always released.
 - **Guard:** `CRITICAL — see BUGLOG.md CAMPAIGN-BUG-126` in
   `ManagesWordPressMedia::uploadToolkitRemoteFile()`.
-
-## Rules for every contributor and AI agent
-
-1. Read this file before changing post creation, update, staging, readback or
-   rollback code.
-2. Code marked `CRITICAL — see ... BUGLOG.md CAMPAIGN-BUG-NNN` is a regression
-   guard. Do not remove or "simplify" it; a refactor that moves it must keep the
-   behavior and update the entry in the same commit.
-3. Log every new critical or high-severity delivery bug here in the same commit
-   as its patch, with the bug ID in the commit message. Never delete an entry.
-4. Timestamps are EST (UTC−05:00).
-
----
 
 ## CAMPAIGN-BUG-089 — Connection reports confused transport with SMP features
 
