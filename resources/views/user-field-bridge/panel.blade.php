@@ -12,12 +12,22 @@
                                 </div>
                                 <button type="button" class="jd-mini jd-mini-indigo" :disabled="{!! $linkExpr !!}.field_busy" :title="{!! $linkExpr !!}.field_busy ? disabledTitle({!! $linkExpr !!}) : `Load Notion fields for this mapped journalist`" @click.stop="loadFieldBridge({!! $linkExpr !!})" data-sfpf-action="load-journalist-field-bridge">
                                     <span x-show="{!! $linkExpr !!}.field_busy===`load`" class="jd-spin"></span>
-                                    <span x-text="{!! $linkExpr !!}.field_busy===`load` ? `Loading fields...` : (fieldBridgeLoaded({!! $linkExpr !!}) ? `Reload fields` : `Load fields`)"></span>
+                                    <span x-text="{!! $linkExpr !!}.field_busy===`load` ? (fieldBridgeLoaded({!! $linkExpr !!}) ? `Checking...` : `Loading fields...`) : (fieldBridgeLoaded({!! $linkExpr !!}) ? `Reload fields` : `Load fields`)"></span>
                                 </button>
                             </div>
                             <div class="jd-inline-status" x-show="{!! $linkExpr !!}.field_message" :class="{!! $linkExpr !!}.field_error ? `is-error` : ``" x-text="{!! $linkExpr !!}.field_message"></div>
-                            <div class="jd-control-reason" x-show="{!! $linkExpr !!}.field_busy" x-text="disabledTitle({!! $linkExpr !!})"></div>
-                            <template x-if="fieldBridgeLoaded({!! $linkExpr !!}) && {!! $linkExpr !!}.field_busy !== &quot;load&quot;">
+                            {{-- Fixed-height status line: the field list below stays mounted during every
+                                 refresh, so loading never removes or shifts it (BUGLOG.md JOURNALIST-BUG-003). --}}
+                            <div class="jd-field-sync-line" x-show="fieldBridgeLoaded({!! $linkExpr !!})" x-cloak :class="{!! $linkExpr !!}.field_refreshing ? `is-checking` : ({!! $linkExpr !!}.field_stale ? `is-stale` : `is-live`)" role="status" aria-live="polite">
+                                <span x-show="{!! $linkExpr !!}.field_refreshing" class="jd-spin jd-spin-dark" aria-hidden="true"></span>
+                                <span x-text="{!! $linkExpr !!}.field_refreshing ? (fieldCheckedLabel({!! $linkExpr !!}) ? `Checking live values · last checked ${fieldCheckedLabel({!! $linkExpr !!})}` : `Checking live values...`) : (fieldCheckedLabel({!! $linkExpr !!}) ? `Live values checked ${fieldCheckedLabel({!! $linkExpr !!})}` : ``)"></span>
+                            </div>
+                            <div class="jd-skeleton-fields" x-show="!fieldBridgeLoaded({!! $linkExpr !!}) && {!! $linkExpr !!}.field_busy===`load`" x-cloak role="status" aria-label="Loading profile fields">
+                                <template x-for="n in 5" :key="n">
+                                    <div class="jd-skeleton-field"><span class="jd-skeleton-line is-short"></span><span class="jd-skeleton-line is-wide"></span></div>
+                                </template>
+                            </div>
+                            <template x-if="fieldBridgeLoaded({!! $linkExpr !!})">
                                 <div class="jd-sfpf-workspace">
                                     <div class="jd-sfpf-field-list">
                                         <template x-for="fieldRow in bridgeVisibleRows({!! $linkExpr !!}).filter(r => !r.is_photo_bridge)" :key="fieldRow.key">

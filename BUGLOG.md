@@ -17,6 +17,16 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## JOURNALIST-BUG-003 — Profile fields panel unmounted during every refresh
+
+- **Severity:** High
+- **Status:** Fixed in 2.0.85, 2026-09-27 18:29:25 EST (with laravel-hexa-package-profiles 3.0.73).
+- **Root cause:** `user-field-bridge/panel.blade.php` rendered the field list only
+  while `field_busy !== "load"`, so every load or reload removed all field cards.
+- **Patch:** The list renders whenever fields are loaded; a fixed-height status
+  line shows the live check, and placeholder cards cover the first load only.
+- **Guard:** see laravel-hexa-package-profiles BUGLOG.md JOURNALIST-BUG-003.
+
 ## JOURNALIST-BUG-002 — Journalist snapshots stored WordPress login sessions and API password hashes
 
 - **Severity:** High (security)
