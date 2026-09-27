@@ -4,6 +4,23 @@ Permanent record of critical and high-severity article campaign bugs involving
 WordPress delivery and verification in this package. Bug IDs are shared with the
 [laravel-hexa-app-publish BUGLOG](https://github.com/mikeyperes/laravel-hexa-app-publish/blob/main/BUGLOG.md).
 
+## CAMPAIGN-BUG-126 — The WordPress host fetched caller-supplied image URLs
+
+- **Severity:** High (security)
+- **Status:** Patched 2026-09-26 21:50 EST; released in 2.0.82.
+- **Impact:** For WP Toolkit sites, `uploadMedia()` passed any remote image URL
+  to `wp media import` on the WordPress server, which only checked
+  `FILTER_VALIDATE_URL`. A search-result or chat-picked URL could make the
+  hosting server request an internal address.
+- **Root cause:** Remote media for WP Toolkit bypassed the guarded
+  `WordPressMediaSourceService` that the REST and plugin transports use.
+- **Patch:** `uploadToolkitRemoteFile()` downloads through
+  `WordPressMediaSourceService::acquire()` (guarded outbound transport and
+  image inspection) and imports the verified local file; the temporary file is
+  always released.
+- **Guard:** `CRITICAL — see BUGLOG.md CAMPAIGN-BUG-126` in
+  `ManagesWordPressMedia::uploadToolkitRemoteFile()`.
+
 ## Rules for every contributor and AI agent
 
 1. Read this file before changing post creation, update, staging, readback or

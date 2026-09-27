@@ -17,7 +17,7 @@ trait ManagesWordPressMedia
                 return $this->uploadToolkitLocalFile($target, $normalizedPath, $fileName, $altText, $caption, $description);
             }
 
-            return $this->wptoolkit->wpCliUploadMedia($target['server'], (int) $target['install_id'], $filePath, $fileName, $altText, $caption, $description);
+            return $this->uploadToolkitRemoteFile($target, $normalizedPath, $fileName, $altText, $caption, $description);
         }
 
         if ($this->usesPluginTransport($target)) {
@@ -54,6 +54,28 @@ trait ManagesWordPressMedia
         }
 
         return $this->rest->uploadMedia($target['url'], $target['username'], $target['application_password'], $filePath, $fileName, $altText);
+    }
+
+    /**
+     * CRITICAL — see BUGLOG.md CAMPAIGN-BUG-126. Remote images are downloaded
+     * on Publish through the guarded outbound transport and imported as a local
+     * file. The WordPress host never fetches a caller-supplied URL itself.
+     */
+    private function uploadToolkitRemoteFile(array $target, string $url, string $fileName, string $altText, string $caption, string $description): array
+    {
+        try {
+            $artifact = app(\hexa_package_wordpress\Services\WordPressMediaSourceService::class)->acquire($url, $fileName);
+        } catch (\hexa_package_media\Exceptions\MediaPipelineException $exception) {
+            return ['success' => false, 'message' => 'Remote image could not be downloaded safely: '.$exception->getMessage(), 'data' => null];
+        } catch (\Throwable $exception) {
+            return ['success' => false, 'message' => 'Remote image could not be downloaded safely.', 'data' => null];
+        }
+
+        try {
+            return $this->uploadToolkitLocalFile($target, $artifact->path, $fileName !== '' ? $fileName : $artifact->filename, $altText, $caption, $description);
+        } finally {
+            $artifact->release();
+        }
     }
 
     public function updateMedia(array $target, int $mediaId, array $attributes): array
