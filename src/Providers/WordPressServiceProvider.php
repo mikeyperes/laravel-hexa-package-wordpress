@@ -31,6 +31,7 @@ class WordPressServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . "/../../config/wordpress.php", "wordpress");
+        $this->app->singleton(\hexa_package_wordpress\Connections\WordPressConnectionRegistry::class);
         $this->app->singleton(AcfStructureRegistry::class);
         $this->app->singleton(AcfEducationMetadataService::class);
         $this->app->singleton(AcfRepeaterNormalizer::class);
@@ -58,6 +59,7 @@ class WordPressServiceProvider extends ServiceProvider
     {
         $this->loadRoutesFrom(__DIR__ . "/../../routes/wordpress.php");
         $this->loadViewsFrom(__DIR__ . "/../../resources/views", "wordpress");
+        $this->loadMigrationsFrom(__DIR__ . "/../../database/migrations");
 
         app(PackageAssetRegistry::class)->register("wordpress", dirname(__DIR__, 2) . "/resources/js", [
             "media-operations.js",
