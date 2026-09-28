@@ -10,6 +10,7 @@ use hexa_package_media\Transfer\TemporaryMediaResourceManager;
 use hexa_package_wordpress\Http\Controllers\MediaOperationController;
 use hexa_package_wordpress\Media\Contracts\WordPressMediaDestination;
 use hexa_package_wordpress\Media\Destinations\PostFeaturedImageDestination;
+use hexa_package_wordpress\Media\Destinations\PostGalleryFieldDestination;
 use hexa_package_wordpress\Media\Destinations\UserAvatarDestination;
 use hexa_package_wordpress\Media\WordPressMediaAssignmentService;
 use hexa_package_wordpress\Media\WordPressMediaDuplicateResolver;
@@ -156,6 +157,45 @@ class WordPressMediaAssignmentServiceTest extends TestCase
         $this->assertTrue($destination->verify($gateway, [], 77)["success"]);
         $this->assertTrue($destination->rollback($gateway, [], $captured)["success"]);
         $this->assertSame(12, $manager->featuredImageId);
+    }
+
+    public function test_gallery_destination_appends_once_verifies_and_rolls_back(): void
+    {
+        $manager = new FakeWordPressMediaManager();
+        $gateway = new WordPressMediaGateway($manager);
+        $destination = new PostGalleryFieldDestination(501, "gallery");
+
+        $captured = $destination->capture($gateway, []);
+        $this->assertSame([0, [5, 9]], [$captured["media_id"], $captured["media_ids"]], "a gallery never counts as already assigned");
+        $this->assertTrue($destination->assign($gateway, [], 77)["success"]);
+        $this->assertSame([5, 9, 77], $manager->gallery);
+        $again = $destination->assign($gateway, [], 77);
+        $this->assertTrue($again["already_in_gallery"] ?? false);
+        $this->assertSame(1, $manager->gallerySetCalls, "an image already in the gallery is not written again");
+        $this->assertTrue($destination->verify($gateway, [], 77)["success"]);
+        $this->assertFalse($destination->verify($gateway, [], 3)["success"]);
+        $this->assertTrue($destination->rollback($gateway, [], $captured)["success"]);
+        $this->assertSame([5, 9], $manager->gallery);
+        $this->assertSame("post_gallery:501:gallery", $destination->key());
+    }
+
+    public function test_full_pipeline_adds_a_new_image_to_a_gallery_field(): void
+    {
+        $manager = new FakeWordPressMediaManager();
+        $service = $this->assignmentService($manager, new WordPressMediaOperationStore());
+        $path = $this->imagePath();
+
+        try {
+            $result = $service->assign([], MediaInput::local($path, "Gallery.png"), new PostGalleryFieldDestination(501, "gallery"), $this->assignmentOptions("gallery:test:add:12345678"));
+
+            $this->assertTrue($result["success"], $result["message"]);
+            $this->assertSame(77, $result["media_id"]);
+            $this->assertSame([5, 9, 77], $manager->gallery);
+            $this->assertSame([5, 9], $result["previous"]["media_ids"]);
+            $this->assertSame(1, $manager->cachePurgeCalls);
+        } finally {
+            @unlink($path);
+        }
     }
 
     public function test_featured_image_gateway_accepts_an_already_verified_assignment(): void
@@ -399,6 +439,11 @@ final class FakeWordPressMediaManager extends WordPressManagerService
 
     public array $deletedMediaIds = [];
 
+    /** @var array<int, int> */
+    public array $gallery = [5, 9];
+
+    public int $gallerySetCalls = 0;
+
     public function __construct()
     {
     }
@@ -502,6 +547,24 @@ final class FakeWordPressMediaManager extends WordPressManagerService
                     "litespeed_detected" => true,
                 ]),
             ];
+        }
+
+        if (str_contains($php, "HEXA_GALLERY_SET:")) {
+            $this->gallerySetCalls++;
+            preg_match('/\$ids=(array \(.*?\));/s', $php, $match);
+            preg_match_all('/=> (\d+)/', (string) ($match[1] ?? ""), $ids);
+            $this->gallery = array_map("intval", $ids[1]);
+
+            return ["success" => true, "stdout" => "HEXA_GALLERY_SET:" . json_encode(["success" => true, "message" => "Gallery field saved and verified.", "media_ids" => $this->gallery])];
+        }
+
+        if (str_contains($php, "HEXA_GALLERY_STATE:")) {
+            $urls = [];
+            foreach ($this->gallery as $id) {
+                $urls[(string) $id] = "https://example.test/uploads/gallery-{$id}.png";
+            }
+
+            return ["success" => true, "stdout" => "HEXA_GALLERY_STATE:" . json_encode(["success" => true, "message" => "Gallery field loaded.", "media_ids" => $this->gallery, "urls" => $urls])];
         }
 
         if (str_contains($php, "HEXA_MEDIA_EXACT_MATCH:")) {

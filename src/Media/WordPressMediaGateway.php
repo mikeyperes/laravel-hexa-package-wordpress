@@ -7,6 +7,9 @@ use hexa_package_wordpress\Services\WordPressManagerService;
 
 final class WordPressMediaGateway
 {
+    /** Defines $galleryIds(): attachment IDs from a raw gallery value (IDs, image arrays, JSON or serialized text). */
+    private const GALLERY_IDS_PHP = '$galleryIds=function($value)use(&$galleryIds){if(is_string($value)){$decoded=json_decode($value,true);if(is_array($decoded)){return $galleryIds($decoded);}$value=maybe_unserialize($value);if(is_string($value)){preg_match_all("/\\d+/",$value,$m);$value=$m[0]??[];}}$ids=[];foreach((array)$value as $item){$id=is_array($item)?(int)($item["ID"]??$item["id"]??$item["media_id"]??0):(is_numeric($item)?(int)$item:0);if($id>0&&!in_array($id,$ids,true)){$ids[]=$id;}}return $ids;};';
+
     public function __construct(private readonly WordPressManagerService $wordpress)
     {
     }
@@ -206,6 +209,36 @@ final class WordPressMediaGateway
         return is_array($payload) ? $payload : ["success" => false, "message" => (string) ($result["message"] ?? "Featured image assignment failed.")];
     }
 
+    /**
+     * A post's gallery field as attachment IDs, read like the field's owner does:
+     * ACF (raw) when active, otherwise post meta in ACF's layout.
+     */
+    public function galleryState(array $target, int $postId, string $field): array
+    {
+        $php = '$postId=' . $postId . ';$field=' . var_export($field, true) . ';$post=get_post($postId);'
+            . self::GALLERY_IDS_PHP
+            . 'if(!$post){echo "HEXA_GALLERY_STATE:" . wp_json_encode(["success"=>false,"message"=>"WordPress post was not found.","post_id"=>$postId,"media_ids"=>[]]);return;}'
+            . '$ids=$galleryIds(function_exists("get_field")?get_field($field,$postId,false):get_post_meta($postId,$field,true));$urls=[];foreach($ids as $id){$urls[(string)$id]=(string)wp_get_attachment_url($id);}'
+            . 'echo "HEXA_GALLERY_STATE:" . wp_json_encode(["success"=>true,"message"=>"Gallery field loaded.","post_id"=>$postId,"field"=>$field,"media_ids"=>$ids,"urls"=>$urls]);';
+
+        return $this->galleryCall($target, $php, "HEXA_GALLERY_STATE:", "Gallery field could not be loaded.");
+    }
+
+    /** Store exactly these attachment IDs in a post's gallery field and read them back. */
+    public function setGallery(array $target, int $postId, string $field, array $mediaIds): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map("intval", $mediaIds), static fn (int $id): bool => $id > 0)));
+        $php = '$postId=' . $postId . ';$field=' . var_export($field, true) . ';$ids=' . var_export($ids, true) . ';$post=get_post($postId);'
+            . self::GALLERY_IDS_PHP
+            . 'if(!$post){echo "HEXA_GALLERY_SET:" . wp_json_encode(["success"=>false,"message"=>"WordPress post was not found.","post_id"=>$postId,"media_ids"=>[]]);return;}'
+            . '$read=function()use($field,$postId,$galleryIds){return $galleryIds(function_exists("get_field")?get_field($field,$postId,false):get_post_meta($postId,$field,true));};'
+            . 'if($read()!==$ids){$saved=function_exists("update_field")?(bool)update_field($field,$ids,$postId):false;if(!$saved||$read()!==$ids){update_post_meta($postId,$field,$ids);}}'
+            . 'clean_post_cache($postId);$stored=$read();$success=$stored===$ids;'
+            . 'echo "HEXA_GALLERY_SET:" . wp_json_encode(["success"=>$success,"message"=>$success?"Gallery field saved and verified.":"Gallery field did not verify.","post_id"=>$postId,"field"=>$field,"media_ids"=>$stored]);';
+
+        return $this->galleryCall($target, $php, "HEXA_GALLERY_SET:", "Gallery field could not be saved.");
+    }
+
     public function purgePostCache(array $target, int $postId): array
     {
         if ($postId <= 0) {
@@ -298,6 +331,14 @@ final class WordPressMediaGateway
     public function delete(array $target, int $mediaId): array
     {
         return $this->wordpress->deleteMedia($target, $mediaId, true);
+    }
+
+    private function galleryCall(array $target, string $php, string $marker, string $failure): array
+    {
+        $result = $this->wordpress->evaluatePhp($target, $php);
+        $payload = ($result["success"] ?? false) ? $this->decode((string) ($result["stdout"] ?? ""), $marker) : null;
+
+        return is_array($payload) ? $payload : ["success" => false, "message" => (string) ($result["message"] ?? $failure), "media_ids" => []];
     }
 
     private function mediaIdFromResponse(array $response): int
