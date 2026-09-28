@@ -120,15 +120,34 @@ final class AttachesToWordPressObjectTest extends TestCase
 
     public function test_a_pull_marks_the_post_link_synced_and_can_mark_many_outdated_in_one_update(): void
     {
-        $a = PostLink::create(['link_site_id' => 1, 'wp_post_id' => '1', 'sync_status' => 'outdated', 'outdated_at' => now()]);
+        $a = PostLink::create(['link_site_id' => 1, 'wp_post_id' => '1', 'sync_status' => 'synced']);
         PostLink::create(['link_site_id' => 1, 'wp_post_id' => '2']);
 
         $a->forceFill($a->wordpressPullAttributes(['post' => ['post_title' => 'T'], 'meta' => []], message: 'Imported.'))->save();
         $this->assertSame(['synced', null, 'Imported.'], [$a->fresh()->sync_status, $a->fresh()->outdated_at, $a->fresh()->sync_message]);
+        $this->assertFalse($a->fresh()->hasPendingWordPressChanges());
 
         $this->assertSame(2, PostLink::markWordPressOutdated(PostLink::query(), 'Profile merged.'));
         $this->assertSame(['outdated', 'outdated'], PostLink::query()->orderBy('id')->pluck('sync_status')->all());
         $this->assertSame(['Profile merged.'], PostLink::query()->distinct()->pluck('sync_message')->all());
+    }
+
+    public function test_a_pull_refreshes_the_copy_but_keeps_changes_that_still_need_writing(): void
+    {
+        // VERIFIED-BUG-004: a scan marked unwritten local changes as synced, so they were never written.
+        $link = PostLink::create(['link_site_id' => 1, 'wp_post_id' => '3', 'remote_post' => ['post_title' => 'Old'], 'sync_status' => 'outdated', 'outdated_at' => now()->subHour(), 'sync_message' => 'Bio copied from Notion.']);
+        $this->assertTrue($link->hasPendingWordPressChanges());
+
+        $link->forceFill($link->wordpressPullAttributes(['post' => ['post_title' => 'From WordPress']], message: 'Imported.'))->save();
+
+        $fresh = $link->fresh();
+        $this->assertSame(['post_title' => 'From WordPress'], $fresh->remote_post, 'the copy is refreshed');
+        $this->assertSame(['outdated', 'Bio copied from Notion.'], [$fresh->sync_status, $fresh->sync_message]);
+        $this->assertNotNull($fresh->outdated_at);
+        $this->assertNotNull($fresh->last_pulled_at);
+
+        $fresh->forceFill($fresh->wordpressPushAttributes(['post' => ['post_title' => 'Written']], 'Written.'))->save();
+        $this->assertSame('synced', $fresh->fresh()->sync_status, 'a push clears it');
     }
 
     public function test_a_link_without_sync_columns_only_stamps_its_pull_time(): void

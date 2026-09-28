@@ -84,7 +84,9 @@ trait AttachesToWordPressObject
     }
 
     /**
-     * Columns for a copy just read from WordPress.
+     * Columns for a copy just read from WordPress. A record whose local changes
+     * are still waiting to be written stays outdated: reading WordPress does not
+     * apply them (see smp-verified-profiles BUGLOG.md VERIFIED-BUG-004).
      *
      * @param  array<string, array<array-key, mixed>>  $sections  section name => data
      * @param  bool  $merge  keep stored keys the read did not return
@@ -98,8 +100,16 @@ trait AttachesToWordPressObject
             $this->snapshotAttributes($sections, $merge),
             [$config['pulled_at'] => now()],
             $this->checkedAttributes(),
-            $this->syncAttributes('synced', null, $message),
+            $this->hasPendingWordPressChanges() ? [] : $this->syncAttributes('synced', null, $message),
         );
+    }
+
+    /** Local changes are waiting to be written to WordPress. */
+    public function hasPendingWordPressChanges(): bool
+    {
+        $sync = $this->wordpressAttachment()['sync'] ?? null;
+
+        return $sync !== null && $this->getAttribute($sync['status']) === 'outdated';
     }
 
     /**

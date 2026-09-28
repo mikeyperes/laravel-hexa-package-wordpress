@@ -17,6 +17,18 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## VERIFIED-BUG-004 — Reading WordPress marked unwritten local changes as written
+
+- **Severity:** High (data loss)
+- **Status:** Fixed in 2.7.0, 2026-09-28 02:33:26 EST (with laravel-hexa-package-smp-verified-profiles 0.6.0).
+- **Root cause:** `AttachesToWordPressObject::wordpressPullAttributes()` always
+  set the sync status to `synced`, so a verified-profile scan cleared the
+  "outdated" mark of changes still waiting to be written; they were never written.
+- **Patch:** A pull refreshes the stored copy and keeps an outdated record
+  outdated (`hasPendingWordPressChanges()`); only a push marks it synced.
+- **Guard:** `AttachesToWordPressObjectTest::test_a_pull_refreshes_the_copy_but_keeps_changes_that_still_need_writing`.
+  Full entry: laravel-hexa-package-smp-verified-profiles BUGLOG.md VERIFIED-BUG-004.
+
 ## JOURNALIST-BUG-005 — Changing a journalist's WordPress username always failed
 
 - **Severity:** High
