@@ -17,6 +17,24 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
 
 ---
 
+## JOURNALIST-BUG-005 — Changing a journalist's WordPress username always failed
+
+- **Severity:** High
+- **Status:** Fixed in 2.6.0, 2026-09-28 01:57:16 EST (with laravel-hexa-package-profiles 3.4.0).
+- **Symptom:** "Change username" on a journalist stopped with an error before
+  touching WordPress.
+- **Impact:** No journalist username could be changed from 2026-06-20 on.
+- **Root cause:** Changing a username creates a replacement user and copies
+  the old one onto it with `exportUserCloneSnapshot()` and
+  `applyUserCloneSnapshot()`. The merge 1243fa7 (2026-06-20) kept the calls in
+  the profiles package but dropped both methods from `WordPressManagerService`.
+  Tests replaced the service with mocks that accept any method name, so nothing
+  failed. (The profiles package separately lost `emailWithSuffix()`; see its entry.)
+- **Patch:** Both methods are restored as `ClonesWordPressUsers`. Login sessions
+  and application passwords are still never copied.
+- **Guard:** `WordPressUserCloneTest`; the profiles package checks that every
+  WordPress method a journalist action calls exists on `WordPressManagerService`.
+
 ## JOURNALIST-BUG-003 — Profile fields panel unmounted during every refresh
 
 - **Severity:** High

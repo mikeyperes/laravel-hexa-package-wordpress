@@ -3,6 +3,7 @@
 namespace hexa_package_wordpress\Services;
 
 use hexa_package_whm\Models\WhmServer;
+use hexa_package_wordpress\Services\Concerns\WordPressManager\ClonesWordPressUsers;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\HandlesWordPressRestAndToolkit;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ExecutesWordPressRestRoutes;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressAcf;
@@ -20,6 +21,7 @@ use Illuminate\Support\Str;
 
 class WordPressManagerService
 {
+    use ClonesWordPressUsers;
     use HandlesWordPressRestAndToolkit;
     use ExecutesWordPressRestRoutes;
     use ManagesWordPressAcf;
