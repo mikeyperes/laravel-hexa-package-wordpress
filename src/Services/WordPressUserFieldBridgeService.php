@@ -2,7 +2,9 @@
 
 namespace hexa_package_wordpress\Services;
 
+use hexa_package_notion\Services\NotionFieldNames;
 use hexa_package_notion\Services\NotionService;
+use hexa_package_notion\Services\NotionValueNormalizer;
 
 class WordPressUserFieldBridgeService
 {
@@ -121,11 +123,18 @@ class WordPressUserFieldBridgeService
             if (!($row["can_write_notion"] ?? false)) {
                 return ["success" => false, "message" => (string) ($row["notion_disabled_reason"] ?? "This Notion field cannot be written from WordPress.")];
             }
+            // Photos move through the photo picker, never as text into a Notion files property.
+            if ($row["is_photo_bridge"] ?? false) {
+                return ["success" => false, "message" => "Profile photos are copied with the photo picker, not this field."];
+            }
 
             $value = $overrideValue !== null ? $overrideValue : (string) ($row["wp_value"] ?? "");
             $result = $this->notion->updatePageProperty($notionPageId, (string) ($row["notion_field"] ?? ""), $value);
             if (!($result["success"] ?? false)) {
                 return ["success" => false, "message" => $result["error"] ?? "Notion field update failed."];
+            }
+            if (($result["verified"] ?? null) === false) {
+                return ["success" => false, "message" => "Notion did not keep the new " . (string) ($row["label"] ?? $key) . ". Sent " . $this->valuePreview($value) . "; Notion has " . $this->valuePreview((new NotionValueNormalizer())->stringify($result["stored_value"] ?? "")) . "."];
             }
         } else {
             return ["success" => false, "message" => "Unsupported bridge direction."];
@@ -470,13 +479,10 @@ class WordPressUserFieldBridgeService
         return trim($value, ".");
     }
 
+    /** The Notion package's one rule for "same value" (NotionValueNormalizer::comparable). */
     protected function normalizeComparableValue(string $value): string
     {
-        $value = mb_strtolower(trim($value));
-        $value = preg_replace("/\r\n/u", "\n", $value) ?? $value;
-        $value = preg_replace("/[ \t]+/u", " ", $value) ?? $value;
-
-        return trim($value);
+        return (new NotionValueNormalizer())->comparable($value);
     }
 
     protected function valuePreview(string $value): string
@@ -550,26 +556,7 @@ class WordPressUserFieldBridgeService
      */
     protected function firstExistingField(array $properties, array $fields): string
     {
-        foreach ($fields as $field) {
-            $field = (string) $field;
-            if ($field !== "" && array_key_exists($field, $properties)) {
-                return $field;
-            }
-        }
-
-        $normalized = [];
-        foreach (array_keys($properties) as $name) {
-            $normalized[$this->normalizeFieldName((string) $name)] = (string) $name;
-        }
-
-        foreach ($fields as $field) {
-            $key = $this->normalizeFieldName((string) $field);
-            if ($key !== "" && isset($normalized[$key])) {
-                return $normalized[$key];
-            }
-        }
-
-        return "";
+        return NotionFieldNames::pick($properties, array_map("strval", $fields)) ?? "";
     }
 
     protected function stringValue(mixed $value): string
@@ -579,14 +566,5 @@ class WordPressUserFieldBridgeService
         }
 
         return trim((string) ($value ?? ""));
-    }
-
-    protected function normalizeFieldName(string $name): string
-    {
-        $value = mb_strtolower(trim($name));
-        $value = preg_replace("/[^\p{L}\p{N}]+/u", " ", $value) ?? $value;
-        $value = preg_replace("/\s+/u", " ", $value) ?? $value;
-
-        return trim($value);
     }
 }
