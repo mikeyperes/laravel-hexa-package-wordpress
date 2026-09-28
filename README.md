@@ -35,6 +35,21 @@ address or install points the model at the matching connection instead of
 rewriting a shared one. Scopes: `whereSiteHost($url)`,
 `whereWordPressConnection(fn ($connection) => ...)`.
 
+### Connecting a site with WordPress's Authorize Application
+
+`wordpress:app-password <site> [--label=] [--app="Hexa PR Wire"]` remembers the
+site as a `rest` connection and prints its one-time
+`/wp-admin/authorize-application.php` link (valid 30 minutes). A signed-in
+administrator opens it and clicks **Yes, I approve of this connection**;
+WordPress sends the new Application Password straight to
+`/wordpress/app-password/callback/{state}`, which checks it is a working
+administrator (`/wp/v2/users/me`), stores it through the registry and records
+an `authorization` report section. The password never passes through a person.
+`--status` reports the connection with the secret as present/missing only.
+WordPress puts the password in the callback URL's query string, so the
+approving browser's history and the web server's access log hold it; use a
+trusted browser profile.
+
 ## Campaign bug log
 
 [BUGLOG.md](BUGLOG.md) records every critical and high-severity delivery bug,
