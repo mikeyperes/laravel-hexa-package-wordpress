@@ -41,7 +41,7 @@ WordPress delivery and verification in this package. Bug IDs are shared with the
   `wp user meta list` into the returned profile, and callers persisted it.
 - **Patch:** The single-bootstrap profile reader skips credential meta inside
   WordPress, so it never reaches Publish. Existing rows were scrubbed.
-- **Guard:** `protectedUserMetaKeys()` in `ManagesWordPressUsersAndMeta`;
+- **Guard:** `WordPressSnapshot::clean()` (2.4.0) strips credential and session keys from every stored WordPress copy (journalist links, verified sources) through `AttachesToWordPressObject`; `protectedUserMetaKeys()` in `ManagesWordPressUsersAndMeta`;
   `WordPressUserProfileReadTest::test_credential_meta_is_excluded_inside_wordpress`.
 
 ## JOURNALIST-BUG-001 — Opening one journalist took 30-45 seconds

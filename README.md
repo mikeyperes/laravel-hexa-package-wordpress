@@ -50,6 +50,19 @@ WordPress puts the password in the callback URL's query string, so the
 approving browser's history and the web server's access log hold it; use a
 trusted browser profile.
 
+## Person-to-page links
+
+Records that tie something of ours to one WordPress object (a journalist to a
+WordPress user, a verified profile to a WordPress post) use
+`Connections\Concerns\AttachesToWordPressObject`. The model names its site
+relation, object kind, id column, snapshot columns and sync columns in
+`wordpressAttachment()`, and gets `wordpressPullAttributes()`,
+`wordpressPushAttributes()`, `wordpressOutdatedAttributes()`,
+`wordpressRemovedAttributes()`, `markWordPressOutdated()`, `remoteSnapshot()`
+and `wordpressEditUrl()`. Every stored copy passes through
+`WordPressSnapshot::clean()`, which drops passwords, activation keys, login
+sessions and application-password hashes.
+
 ## Campaign bug log
 
 [BUGLOG.md](BUGLOG.md) records every critical and high-severity delivery bug,
