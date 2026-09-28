@@ -100,6 +100,11 @@ final class WordPressConnectionRegistryTest extends TestCase
         $this->assertSame('HTTP 401', $connection->last_error);
         $this->assertSame(['rest' => false], $connection->capability_report);
         $this->assertNotNull($connection->capability_checked_at);
+
+        $this->registry->recordCheck($connection, true, null, ['plugins' => ['acf' => true]]);
+        $this->assertSame(['rest' => false, 'plugins' => ['acf' => true]], $connection->refresh()->capability_report, 'sections merge');
+        $this->assertSame('connected', $connection->status);
+        $this->assertNull($connection->last_error);
     }
 
     public function test_bad_input_is_rejected(): void

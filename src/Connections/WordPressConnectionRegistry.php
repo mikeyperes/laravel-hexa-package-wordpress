@@ -145,17 +145,22 @@ class WordPressConnectionRegistry
     /**
      * Record the outcome of a connection check.
      *
-     * @param  array<string, mixed>|null  $report  secret-free capability report
+     * The capability report is kept in named sections, one per kind of check
+     * (for example `connection` from Publish's transport test, `publication`
+     * and `plugins` from the journalist context inspection). A check replaces
+     * only the sections it reports, so tools never erase each other's results.
+     *
+     * @param  array<string, mixed>|null  $sections  secret-free report sections
      */
-    public function recordCheck(WordPressConnection $connection, bool $connected, ?string $error = null, ?array $report = null): void
+    public function recordCheck(WordPressConnection $connection, bool $connected, ?string $error = null, ?array $sections = null): void
     {
         $connection->status = $connected ? 'connected' : 'error';
         $connection->last_error = $connected ? null : ($error ?: 'Connection check failed.');
         if ($connected) {
             $connection->last_connected_at = now();
         }
-        if ($report !== null) {
-            $connection->capability_report = $report;
+        if ($sections !== null) {
+            $connection->capability_report = array_replace((array) $connection->capability_report, $sections);
             $connection->capability_checked_at = now();
         }
         $connection->save();

@@ -23,7 +23,17 @@ Use `hexa_package_wordpress\Connections\WordPressConnectionRegistry`:
 - `storeSecret()` / `secret()` / `hasSecret()` read and write the vault.
 - `target($connection, $context)` builds the `WordPressManagerService` target;
   WP Toolkit targets never read secrets.
-- `recordCheck()` saves the outcome and capability report of a check.
+- `recordCheck()` saves the outcome of a check; its report sections merge,
+  so one tool's check never erases another's.
+
+Models use the `Connections\Concerns\UsesWordPressConnection` trait and map
+their own attribute names to connection facts in
+`wordpressConnectionAttributes()` (`site_url`, `transport`, hosting facts,
+`report:<section>`, `secret:<name>`, `relation:server`). Reads come from the
+connection; writes are applied to it when the model saves, and a changed
+address or install points the model at the matching connection instead of
+rewriting a shared one. Scopes: `whereSiteHost($url)`,
+`whereWordPressConnection(fn ($connection) => ...)`.
 
 ## Campaign bug log
 
