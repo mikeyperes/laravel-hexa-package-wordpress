@@ -4,6 +4,28 @@ Permanent record of critical and high-severity article campaign bugs involving
 WordPress delivery and verification in this package. Bug IDs are shared with the
 [laravel-hexa-app-publish BUGLOG](https://github.com/mikeyperes/laravel-hexa-app-publish/blob/main/BUGLOG.md).
 
+## JOURNALIST-BUG-012 — Author photos could not be set on REST or HWS Base Tools sites
+
+- **Severity:** High
+- **Status:** Fixed in 2.10.2, 2026-09-28 19:48:35 EST.
+- **Symptom:** A journalist push to bombreport.com uploaded the photo, then
+  failed with "PHP evaluation is only available on WP Toolkit targets." Every
+  retry would upload the image again, and on an Application Password site
+  without HWS Base Tools the cache purge after the photo change failed and
+  rolled the photo back.
+- **Root cause:** The media gateway verified attachments and looked for an
+  already-uploaded copy only with evaluated WordPress programs (WP Toolkit
+  only), and the site cache purge treated a missing Base Tools route as a
+  failure.
+- **Patch:** `WordPressMediaGateway::restInspect()` verifies an attachment
+  from its REST record (image, valid URL, non-empty file);
+  `restCurrentMatch()` reuses the current attachment when type, size and
+  dimensions match; `getMedia()` reads one attachment over REST or the signed
+  bridge. A site with no purge route skips the purge with a warning.
+- **Guard:** `WordPressUserProfileRouteTest::test_an_application_password_site_without_base_tools_skips_the_cache_purge`;
+  full avatar pipeline on a throwaway WordPress on server 236 passed on both
+  transports, and the second run reused the same attachment.
+
 ## JOURNALIST-BUG-011 — Full user lists failed on every REST connection
 
 - **Severity:** High

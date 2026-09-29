@@ -188,6 +188,21 @@ trait ManagesWordPressMedia
         return is_array($payload) ? $payload : ['success' => false, 'message' => 'Failed to parse post trash output.'];
     }
 
+    /** One attachment as the WordPress REST API reports it (REST and HWS Base Tools connections). */
+    public function getMedia(array $target, int $mediaId): array
+    {
+        if ($mediaId <= 0) {
+            return ['success' => false, 'message' => 'A WordPress media ID is required.', 'data' => null];
+        }
+        $response = $this->restRequest($this->normalizeTarget($target), 'get', 'media/'.$mediaId, [], ['context' => 'edit']);
+
+        return [
+            'success' => (bool) ($response['success'] ?? false),
+            'message' => ($response['success'] ?? false) ? 'Media loaded via REST.' : (string) ($response['message'] ?? 'Media lookup failed.'),
+            'data' => is_array($response['data'] ?? null) ? $response['data'] : null,
+        ];
+    }
+
     public function deleteMedia(array $target, int $mediaId, bool $force = true): array
     {
         $target = $this->normalizeTarget($target);

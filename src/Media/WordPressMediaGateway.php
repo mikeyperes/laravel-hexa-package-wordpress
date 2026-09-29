@@ -97,12 +97,9 @@ final class WordPressMediaGateway
             return ["success" => false, "found" => false, "media_id" => 0, "message" => "The selected image has no valid SHA-256 fingerprint."];
         }
         if (!$this->wordpress->usesWpToolkit($target)) {
-            return [
-                "success" => false,
-                "found" => false,
-                "media_id" => 0,
-                "message" => "Exact WordPress filesystem matching is unavailable for this REST-only connection.",
-            ];
+            return $strategy === "current"
+                ? $this->restCurrentMatch($target, $artifact, max(0, (int) ($hints["current_media_id"] ?? 0)))
+                : ["success" => false, "found" => false, "media_id" => 0, "message" => "Exact WordPress filesystem matching is unavailable for this REST-only connection."];
         }
 
         $currentMediaId = max(0, (int) ($hints["current_media_id"] ?? 0));
@@ -168,6 +165,10 @@ final class WordPressMediaGateway
     {
         if ($mediaId <= 0) {
             return ["success" => false, "message" => "A WordPress media ID is required."];
+        }
+
+        if (!$this->wordpress->usesWpToolkit($target)) {
+            return $this->restInspect($target, $mediaId);
         }
 
         $php = '$id=' . $mediaId . ';$post=get_post($id);$file=get_attached_file($id);$meta=wp_get_attachment_metadata($id);$url=(string)wp_get_attachment_url($id);'
@@ -331,6 +332,63 @@ final class WordPressMediaGateway
     public function delete(array $target, int $mediaId): array
     {
         return $this->wordpress->deleteMedia($target, $mediaId, true);
+    }
+
+    /**
+     * REST and HWS Base Tools connections cannot read the uploads folder, so an
+     * attachment is verified from its REST record: an image with a valid URL
+     * and a non-empty file (size or dimensions reported by WordPress).
+     */
+    private function restInspect(array $target, int $mediaId): array
+    {
+        $media = $this->wordpress->getMedia($target, $mediaId);
+        $data = (array) ($media["data"] ?? []);
+        $details = (array) ($data["media_details"] ?? []);
+        $url = (string) ($data["source_url"] ?? "");
+        $isImage = ($data["media_type"] ?? "") === "image" && str_starts_with((string) ($data["mime_type"] ?? ""), "image/");
+        $bytes = (int) ($details["filesize"] ?? 0);
+        $width = (int) ($details["width"] ?? 0);
+        $height = (int) ($details["height"] ?? 0);
+        $ok = ($media["success"] ?? false) && $isImage && filter_var($url, FILTER_VALIDATE_URL) && ($bytes > 0 || ($width > 0 && $height > 0));
+
+        return [
+            "success" => (bool) $ok,
+            "message" => $ok ? "WordPress image attachment verified over REST." : (!($media["success"] ?? false) ? (string) ($media["message"] ?? "WordPress media lookup failed.") : "WordPress media is missing, is not an image, or has no file."),
+            "media_id" => $mediaId,
+            "url" => $ok ? $url : "",
+            "mime_type" => $isImage ? (string) $data["mime_type"] : "",
+            "file_exists" => (bool) $ok,
+            "bytes" => $bytes,
+            "width" => $width,
+            "height" => $height,
+            "sha256" => "",
+        ];
+    }
+
+    /** Reuse the current attachment over REST when its type, size and dimensions equal the new image. */
+    private function restCurrentMatch(array $target, MediaArtifact $artifact, int $currentMediaId): array
+    {
+        if ($currentMediaId <= 0) {
+            return ["success" => true, "found" => false, "media_id" => 0, "strategy" => "current", "candidate_count" => 0, "scanned_count" => 0, "hashed_count" => 0];
+        }
+        $current = $this->restInspect($target, $currentMediaId);
+        $found = ($current["success"] ?? false)
+            && $current["mime_type"] === $artifact->mimeType
+            && $current["bytes"] > 0 && $current["bytes"] === $artifact->bytes
+            && ($artifact->width <= 0 || $current["width"] === $artifact->width)
+            && ($artifact->height <= 0 || $current["height"] === $artifact->height);
+
+        return [
+            "success" => true,
+            "found" => $found,
+            "media_id" => $found ? $currentMediaId : 0,
+            "url" => $found ? $current["url"] : "",
+            "strategy" => "current",
+            "verification" => $found ? "rest_size_and_dimensions" : "",
+            "candidate_count" => 1,
+            "scanned_count" => 1,
+            "hashed_count" => 0,
+        ];
     }
 
     private function galleryCall(array $target, string $php, string $marker, string $failure): array

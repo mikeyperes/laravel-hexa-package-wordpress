@@ -106,6 +106,18 @@ class WordPressUserProfileRouteTest extends TestCase
         $this->assertCount(130, $result['users']);
     }
 
+    public function test_an_application_password_site_without_base_tools_skips_the_cache_purge(): void
+    {
+        $rest = $this->createMock(WordPressService::class);
+        $rest->method('requestRoute')->willReturn(['success' => false, 'status' => 404, 'message' => 'No route', 'data' => ['code' => 'rest_no_route']]);
+
+        $result = $this->manager($rest)->purgeSiteCache(self::REST);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame([], $result['actions']);
+        $this->assertNotSame([], $result['warnings']);
+    }
+
     private function manager(WordPressService $rest): WordPressManagerService
     {
         return new WordPressManagerService($this->createMock(WpToolkitService::class), $rest);

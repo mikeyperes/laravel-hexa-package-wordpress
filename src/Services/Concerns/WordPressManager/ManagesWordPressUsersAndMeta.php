@@ -195,6 +195,16 @@ trait ManagesWordPressUsersAndMeta
                 ['operation_id' => $this->pluginOperationId()],
             );
             $actions = array_values(array_unique(array_map('strval', (array) ($result['data']['purged'] ?? []))));
+            // An Application Password site without HWS Base Tools has no purge
+            // route; there is nothing Publish can purge there, which is not a failure.
+            if (!$this->usesPluginTransport($target) && ($result['data']['code'] ?? '') === 'rest_no_route') {
+                return [
+                    'success' => true,
+                    'message' => 'Cache purge skipped: this site has no HWS Base Tools purge route.',
+                    'actions' => [],
+                    'warnings' => ['No HWS Base Tools cache purge route on this site; cached pages refresh on their own schedule.'],
+                ];
+            }
 
             return [
                 'success' => (bool) ($result['success'] ?? false),
