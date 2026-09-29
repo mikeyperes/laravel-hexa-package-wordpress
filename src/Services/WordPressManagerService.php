@@ -12,6 +12,7 @@ use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressMe
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressPosts;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressTaxonomies;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressUserAccounts;
+use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressUserProfiles;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ManagesWordPressUsersAndMeta;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\ReportsWordPressConnections;
 use hexa_package_wordpress\Services\Concerns\WordPressManager\VerifiesWordPressPostMutations;
@@ -30,6 +31,7 @@ class WordPressManagerService
     use ManagesWordPressPosts;
     use ManagesWordPressTaxonomies;
     use ManagesWordPressUserAccounts;
+    use ManagesWordPressUserProfiles;
     use ManagesWordPressUsersAndMeta;
     use ReportsWordPressConnections;
     use VerifiesWordPressPostMutations;

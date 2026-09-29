@@ -4,6 +4,28 @@ Permanent record of critical and high-severity article campaign bugs involving
 WordPress delivery and verification in this package. Bug IDs are shared with the
 [laravel-hexa-app-publish BUGLOG](https://github.com/mikeyperes/laravel-hexa-app-publish/blob/main/BUGLOG.md).
 
+## JOURNALIST-BUG-009 — Author photo, bio and fields could only be written over WP Toolkit
+
+- **Severity:** High
+- **Status:** Fixed in 2.10.0 with HexaWP Core 3.6.1, HWS Base Tools 13.3.3 and Hexa PR Wire Distributor 3.5.7, 2026-09-28 19:31:57 EST.
+- **Symptom:** On a site connected by Application Password or HWS Base Tools,
+  `setUserAvatar()` returned "Profile avatar writes require WP Toolkit.", user
+  ACF fields were refused, and bio or meta writes depended on the site
+  registering each meta key for REST. Journalist pushes to external outlets
+  (Hexa PR Wire) could not set the author's photo.
+- **Root cause:** The only author-profile reader and writer was an evaluated
+  WordPress program, which exists only on WP Toolkit connections.
+- **Patch:** HexaWP Core 3.6.1 adds `hexa-plugin-core/v1/users/{id}/profile`
+  (needs `list_users` and `edit_user`; refuses role, login, password,
+  capability and session keys). `userProfileBridge()` calls it directly with an
+  Application Password and through the signed HWS Base Tools route
+  `external-publishing/users/{id}/profile`. Profile reads, avatar writes,
+  native fields, meta and `user_<id>` fields use it on both external
+  transports; a site without the route falls back to plain REST reads, and a
+  refused write is reported, never retried another way.
+- **Guard:** `tests/Unit/WordPressUserProfileRouteTest.php`; end-to-end run
+  against a throwaway WordPress on server 236 passed 18/18 on both transports.
+
 ## Rules for every contributor and AI agent
 
 1. Read this file before changing post creation, update, staging, readback or

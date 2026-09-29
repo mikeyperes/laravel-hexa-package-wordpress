@@ -159,7 +159,7 @@ class FrontendArchitectureTest extends TestCase
             $root . '/src/Services/Concerns/WordPressManager/ManagesWordPressAvatars.php',
         );
         $users = (string) file_get_contents(
-            $root . '/src/Services/Concerns/WordPressManager/ManagesWordPressUsersAndMeta.php',
+            $root . '/src/Services/Concerns/WordPressManager/ManagesWordPressUserProfiles.php',
         );
 
         $this->assertStringContainsString('simpleLocalAvatarRuntimePhp()', $avatars);

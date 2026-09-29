@@ -27,6 +27,8 @@ trait ExecutesWordPressRestRoutes
                     $bridgeSuffix = 'article-audio/'.$matches[1];
                 } elseif ($normalizedRoute === '/hws-base-tools/v1/external-publishing/cache/purge') {
                     $bridgeSuffix = 'cache/purge';
+                } elseif (preg_match('#^/hexa-plugin-core/v1/users/([1-9][0-9]*)/profile$#D', $normalizedRoute, $matches) === 1) {
+                    $bridgeSuffix = 'users/'.$matches[1].'/profile';
                 }
                 if ($bridgeSuffix === null) {
                     return [
