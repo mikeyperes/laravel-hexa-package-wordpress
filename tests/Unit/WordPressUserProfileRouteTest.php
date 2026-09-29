@@ -89,6 +89,23 @@ class WordPressUserProfileRouteTest extends TestCase
         $this->assertStringContainsString('cannot be written', $result['message']);
     }
 
+    public function test_a_full_rest_user_inventory_is_paged_at_one_hundred(): void
+    {
+        $rows = static fn (int $from, int $count): array => array_map(static fn (int $id): array => ['id' => $id, 'name' => 'User '.$id], range($from, $from + $count - 1));
+        $rest = $this->createMock(WordPressService::class);
+        $rest->expects($this->exactly(2))->method('request')
+            ->willReturnCallback(function (string $url, string $user, string $password, string $method, string $endpoint, array $body, array $query) use ($rows): array {
+                $this->assertSame(100, $query['per_page']);
+
+                return ['success' => true, 'status' => 200, 'data' => $query['page'] === 1 ? $rows(1, 100) : $rows(101, 30)];
+            });
+
+        $result = $this->manager($rest)->listUsers(self::REST, ['per_page' => 9999]);
+
+        $this->assertTrue($result['success']);
+        $this->assertCount(130, $result['users']);
+    }
+
     private function manager(WordPressService $rest): WordPressManagerService
     {
         return new WordPressManagerService($this->createMock(WpToolkitService::class), $rest);

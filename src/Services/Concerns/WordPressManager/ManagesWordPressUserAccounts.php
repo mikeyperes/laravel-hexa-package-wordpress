@@ -544,8 +544,11 @@ PHP;
             ];
         }
 
+        // CRITICAL — see BUGLOG.md JOURNALIST-BUG-011. WordPress REST allows at
+        // most 100 users per page; larger requests (a full inventory) are paged.
+        $pageSize = min(100, $filters["per_page"]);
         $query = [
-            "per_page" => $filters["per_page"],
+            "per_page" => $pageSize,
             "context" => "edit",
             "_fields" => "id,name,slug,email,url,link,roles,avatar_urls,post_count,post_count_known,content_count,content_count_known",
         ];
@@ -559,12 +562,24 @@ PHP;
             $query["include"] = implode(",", $filters["include"]);
         }
 
-        $response = $this->restRequest($target, "get", "users", [], $query);
-        if (!($response["success"] ?? false)) {
-            return ["success" => false, "message" => (string) ($response["message"] ?? "User lookup failed."), "users" => []];
+        $users = [];
+        for ($page = 1; count($users) < $filters["per_page"]; $page++) {
+            $response = $this->restRequest($target, "get", "users", [], $query + ["page" => $page]);
+            if (!($response["success"] ?? false)) {
+                // Past the last page WordPress answers 400; earlier pages are complete.
+                if ($page > 1 && (int) ($response["status"] ?? 0) === 400) {
+                    break;
+                }
+                return ["success" => false, "message" => (string) ($response["message"] ?? "User lookup failed."), "users" => []];
+            }
+            $rows = array_filter((array) ($response["data"] ?? []), "is_array");
+            $users = array_merge($users, array_map([$this, "normalizeUserRow"], array_values($rows)));
+            if (count($rows) < $pageSize) {
+                break;
+            }
         }
+        $users = array_slice($users, 0, $filters["per_page"]);
 
-        $users = array_values(array_map([$this, "normalizeUserRow"], array_filter((array) ($response["data"] ?? []), "is_array")));
         return ["success" => true, "message" => count($users) . " user(s) loaded via REST.", "users" => $users];
     }
 

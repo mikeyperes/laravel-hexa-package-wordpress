@@ -4,6 +4,21 @@ Permanent record of critical and high-severity article campaign bugs involving
 WordPress delivery and verification in this package. Bug IDs are shared with the
 [laravel-hexa-app-publish BUGLOG](https://github.com/mikeyperes/laravel-hexa-app-publish/blob/main/BUGLOG.md).
 
+## JOURNALIST-BUG-011 — Full user lists failed on every REST connection
+
+- **Severity:** High
+- **Status:** Fixed in 2.10.1, 2026-09-28 19:50:00 EST.
+- **Symptom:** On Application Password and HWS Base Tools sites, author syncs
+  and the "does this author already exist" check failed with "Invalid
+  parameter(s): per_page", so a journalist push to an external outlet stopped
+  before touching it (seen on bombreport.com).
+- **Root cause:** `listUsers()` passed the caller's `per_page` (9999 for a
+  full inventory) straight to WordPress REST, which allows at most 100.
+- **Patch:** The REST path asks for at most 100 users per page and pages until
+  it has them all (a 400 past the last page ends the list).
+- **Guard:** `WordPressUserProfileRouteTest::test_a_full_rest_user_inventory_is_paged_at_one_hundred`;
+  live read-only check listed all 91 Bomb Report users.
+
 ## JOURNALIST-BUG-009 — Author photo, bio and fields could only be written over WP Toolkit
 
 - **Severity:** High
