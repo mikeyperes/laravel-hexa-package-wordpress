@@ -4,6 +4,13 @@ Permanent record of critical and high-severity article campaign bugs involving
 WordPress delivery and verification in this package. Bug IDs are shared with the
 [laravel-hexa-app-publish BUGLOG](https://github.com/mikeyperes/laravel-hexa-app-publish/blob/main/BUGLOG.md).
 
+## WORDPRESS-MEDIA-001 — Stock photos arrived as AVIF and failed the import check
+
+- **Status:** Fixed in 2.10.3, 2026-09-29.
+- **Symptom:** Publish article 7993 (Grit Daily): every upload attempt of two Pexels picks failed with "Downloaded file is not an allowed WordPress image (detected application/octet-stream)".
+- **Root cause:** `WordPressMediaSourceService` sent `Accept: image/avif,...`; Pexels served AVIF, and the host's `file` command in the WP Toolkit import check does not recognise AVIF.
+- **Fix:** The media fetch accepts JPEG, PNG, WebP and GIF only.
+
 ## JOURNALIST-BUG-012 — Author photos could not be set on REST or HWS Base Tools sites
 
 - **Severity:** High

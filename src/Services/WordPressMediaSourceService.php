@@ -40,7 +40,9 @@ final class WordPressMediaSourceService
         $response = $this->http->publicGet(
             $url,
             headers: [
-                'Accept' => 'image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.9',
+                // CRITICAL — see BUGLOG.md WORDPRESS-MEDIA-001. Stock CDNs send
+                // AVIF when it is accepted; the import check cannot read AVIF.
+                'Accept' => 'image/jpeg,image/png,image/webp,image/gif;q=0.9',
                 'User-Agent' => 'Hexa WordPress Media Fetcher/2.0',
             ],
             timeoutSeconds: 30,
