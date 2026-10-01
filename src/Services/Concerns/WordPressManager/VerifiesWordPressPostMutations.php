@@ -480,6 +480,20 @@ if ($isCreate && !$has("post_type")) {
 if ($has("author")) {
     $core["post_author"] = (int) $resolvedAuthorId;
 }
+// CRITICAL — see BUGLOG.md WORDPRESS-POST-001. wp_insert_post() clears a
+// Pending Review post's slug unless the acting user may publish it, and WP-CLI
+// runs as no user. Every write that leaves a post pending acts as the post's
+// own author when that author may publish it (0: no such author).
+$pendingReviewActor = static function (int $authorId, int $postId): int {
+    return $authorId > 0 && $postId > 0 && user_can($authorId, "publish_post", $postId) ? $authorId : 0;
+};
+$stageActor = !$isCreate && $stageStatus === "pending"
+    ? $pendingReviewActor($has("author") ? (int) $resolvedAuthorId : (int) $originalPost->post_author, $postId)
+    : 0;
+$stagePreviousUser = get_current_user_id();
+if ($stageActor > 0) {
+    wp_set_current_user($stageActor);
+}
 $writeThrowableMessage = "";
 try {
     if ($isCreate) {
@@ -503,6 +517,9 @@ try {
     $writeResult = !$isCreate && get_post($postId)
         ? $postId
         : new WP_Error("post_write_hook_exception", $writeThrowableMessage);
+}
+if ($stageActor > 0) {
+    wp_set_current_user($stagePreviousUser);
 }
 if (is_wp_error($writeResult)) {
     $rollbackResult = !$isCreate && $original ? $rollback($postId, $original) : null;
@@ -635,8 +652,21 @@ if ($requestedStatus !== $stageStatus) {
         );
         $statusUpdate["post_name"] = wp_slash($finalTransitionSlug);
     }
+    // CRITICAL — see BUGLOG.md WORDPRESS-POST-001. Moving to Pending Review
+    // acts as the post's author; without an author who may publish it,
+    // WordPress clears the slug and the readback expects that.
+    $statusActor = $requestedStatus === "pending"
+        ? $pendingReviewActor((int) ($stageState["post_author"] ?? 0), $postId)
+        : 0;
+    if ($requestedStatus === "pending" && $statusActor === 0 && trim((string) ($stageState["post_name"] ?? "")) !== "") {
+        $finalTransitionSlug = "";
+    }
+    $statusPreviousUser = get_current_user_id();
     $statusThrowableMessage = "";
     try {
+        if ($statusActor > 0) {
+            wp_set_current_user($statusActor);
+        }
         $statusResult = wp_update_post($statusUpdate, true);
     } catch (\Throwable $exception) {
         $statusThrowableMessage = $exception->getMessage();
@@ -647,6 +677,9 @@ if ($requestedStatus !== $stageStatus) {
         $statusResult = $committedStatus === $requestedStatus
             ? $postId
             : new WP_Error("post_status_hook_exception", $statusThrowableMessage);
+    }
+    if ($statusActor > 0) {
+        wp_set_current_user($statusPreviousUser);
     }
     if (is_wp_error($statusResult)) {
         $rollbackResult = $isCreate ? $forceDraft($postId) : ($original ? $rollback($postId, $original) : null);

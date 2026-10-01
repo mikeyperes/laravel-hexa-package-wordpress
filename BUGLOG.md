@@ -4,6 +4,27 @@ Permanent record of critical and high-severity article campaign bugs involving
 WordPress delivery and verification in this package. Bug IDs are shared with the
 [laravel-hexa-app-publish BUGLOG](https://github.com/mikeyperes/laravel-hexa-app-publish/blob/main/BUGLOG.md).
 
+## WORDPRESS-POST-001 — Pending Review posts lost their slug on WP Toolkit sites
+
+- **Severity:** High
+- **Status:** Fixed in 2.10.4, 2026-10-01 17:39:40 EST.
+- **Symptom:** Grit Daily (WP Toolkit) article 8130, Publish operation 7806:
+  "WordPress changed one or more fields while finalizing the post:
+  post_name." The reviewed slug `selena-gomez-sued-wondermind-investors-securities-fraud`
+  read back empty after the move to `pending`; the post was forced back to
+  draft (WordPress #183120).
+- **Impact:** Every Pending Review delivery over WP Toolkit failed its final
+  readback, and a retry left another draft.
+- **Root cause:** `wp_insert_post()` clears a pending post's `post_name`
+  unless the acting user may publish it. The WP-CLI mutation script runs as no
+  user, so WordPress dropped the slug on the status change.
+- **Patch:** The WP-CLI script acts as the post's own author for any write that
+  leaves the post pending (the staged update of a pending post and the final
+  move to pending) when that author may publish it, then restores the previous
+  user. Without such an author the readback expects WordPress's cleared slug.
+- **Guard:** `CRITICAL — see BUGLOG.md WORDPRESS-POST-001` in
+  `VerifiesWordPressPostMutations`.
+
 ## WORDPRESS-MEDIA-001 — Stock photos arrived as AVIF and failed the import check
 
 - **Status:** Fixed in 2.10.3, 2026-09-29.
