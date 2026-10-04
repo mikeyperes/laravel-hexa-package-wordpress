@@ -72,6 +72,47 @@ trait ManagesWordPressPosts
         ];
     }
 
+    /** Read the publication's own anonymous URL. Never substitute a native login-only preview. */
+    public function getPublicPostUrl(array $target, int $postId, string $postType = 'post'): array
+    {
+        if ($postId <= 0) return ['success' => false, 'message' => 'A WordPress post ID is required.'];
+        $target = $this->normalizeTarget($target);
+        if ($this->usesWpToolkit($target)) {
+            $php = <<<'PHP'
+$post = get_post(__POST_ID__);
+$url = null;
+if ($post && empty($post->post_password)) {
+    if ($post->post_status === 'publish' && is_post_type_viewable($post->post_type)) {
+        $url = get_permalink($post);
+    } elseif (class_exists('HWS\BaseTools\Editorial\PublicDraftPreviewFeature')) {
+        $url = \HWS\BaseTools\Editorial\PublicDraftPreviewFeature::link((int) $post->ID);
+    }
+}
+echo 'HEXA_PUBLIC_POST_URL:' . wp_json_encode(['status' => $post ? $post->post_status : null, 'url' => $url]);
+PHP;
+            $read = $this->evaluatePhp($target, str_replace('__POST_ID__', (string) $postId, $php));
+            $post = ($read['success'] ?? false) ? $this->decodeMarkedPayload((string) ($read['stdout'] ?? ''), 'HEXA_PUBLIC_POST_URL:') : null;
+        } else {
+            $endpoint = $postType === 'post' ? 'posts' : trim($postType, '/');
+            $read = $this->restRequest($target, 'get', $endpoint.'/'.$postId, [], ['context' => 'edit', '_fields' => 'id,status,link,password,hws_public_draft_url']);
+            $data = (array) ($read['data'] ?? []);
+            $status = (string) ($data['status'] ?? '');
+            $post = ['status' => $status, 'url' => !empty($data['password']) ? null : ($status === 'publish' ? ($data['link'] ?? null) : (in_array($status, ['draft', 'pending'], true) ? ($data['hws_public_draft_url'] ?? null) : null))];
+        }
+        $url = (string) ($post['url'] ?? '');
+        $origin = parse_url((string) ($target['url'] ?? ''));
+        $parts = parse_url($url);
+        $valid = ($read['success'] ?? false) && $url !== '' && is_array($parts) && is_array($origin)
+            && in_array($parts['scheme'] ?? '', ['http', 'https'], true)
+            && strtolower($parts['host'] ?? '') === strtolower($origin['host'] ?? '')
+            && ($parts['scheme'] ?? '') === ($origin['scheme'] ?? '')
+            && ($parts['port'] ?? null) === ($origin['port'] ?? null)
+            && !isset($parts['user']) && !isset($parts['pass']);
+        return $valid
+            ? ['success' => true, 'url' => $url, 'status' => $post['status'], 'expires_at' => null]
+            : ['success' => false, 'message' => 'No anonymous publication URL is available. Enable Public Draft Links in HWS Base Tools for draft or pending posts.'];
+    }
+
     public function getPost(array $target, int $postId, string $postType = 'posts'): array
     {
         $target = $this->normalizeTarget($target);

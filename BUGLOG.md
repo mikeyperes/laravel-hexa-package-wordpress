@@ -469,3 +469,7 @@ content.
 **Follow-up.** REST-transport sites compute expected content in Laravel and
 cannot run the plugin callback; they would need the plugin to expose its
 normalized result.
+
+## WORDPRESS-LINK-001 — Draft delivery returned login-only preview URLs
+
+Severity: High. Consumers lacked an authoritative anonymous draft URL and substituted admin or internal review links. `getPublicPostUrl` reads the opt-in HWS Base Tools link through WP Toolkit or protected REST, returns published permalinks normally, and rejects missing/private/password-protected or foreign-origin results. It never changes post status or falls back to WordPress's login-only preview. Guard: focused public-post URL reads and refusal cases.

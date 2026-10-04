@@ -183,6 +183,23 @@ class WordPressRestPostIntegrityTest extends TestCase
         $this->assertCount(5, $this->requests);
     }
 
+    public function test_public_post_url_reads_base_tools_and_never_uses_the_native_preview(): void
+    {
+        $this->queueResponses([[['id'=>90,'status'=>'pending','link'=>'https://wordpress-integrity.example.com/?p=90','hws_public_draft_url'=>'https://wordpress-integrity.example.com/?p=90&draft_key=fixture'],200]]);
+        $result=$this->manager()->getPublicPostUrl($this->target(),90);
+        $this->assertTrue($result['success']);
+        $this->assertSame('https://wordpress-integrity.example.com/?p=90&draft_key=fixture',$result['url']);
+        $this->assertNull($result['expires_at']);
+    }
+
+    public function test_public_post_url_rejects_private_missing_and_foreign_links(): void
+    {
+        foreach ([['status'=>'private','hws_public_draft_url'=>'https://wordpress-integrity.example.com/private'],['status'=>'pending','link'=>'https://wordpress-integrity.example.com/?p=90'],['status'=>'publish','link'=>'https://publish.scalemypublication.com/review'],['status'=>'publish','link'=>'https://name@wordpress-integrity.example.com/post'],['status'=>'publish','password'=>'fixture','link'=>'https://wordpress-integrity.example.com/post']] as $post) {
+            $this->queueResponses([[$post,200]]);
+            $this->assertFalse($this->manager()->getPublicPostUrl($this->target(),90)['success']);
+        }
+    }
+
     private function manager(): WordPressManagerService
     {
         $guard = new OutboundUrlGuard(static fn (string $host): array => ['93.184.216.34']);
