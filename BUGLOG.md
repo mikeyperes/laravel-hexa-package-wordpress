@@ -473,3 +473,11 @@ normalized result.
 ## WORDPRESS-LINK-001 — Draft delivery returned login-only preview URLs
 
 Severity: High. Consumers lacked an authoritative anonymous draft URL and substituted admin or internal review links. `getPublicPostUrl` reads the opt-in HWS Base Tools link through WP Toolkit or protected REST, returns published permalinks normally, and rejects missing/private/password-protected or foreign-origin results. It never changes post status or falls back to WordPress's login-only preview. Guard: focused public-post URL reads and refusal cases.
+
+## WORDPRESS-AVATAR-001 — Author photos failed on One User Avatar sites with a custom table prefix
+
+- Symptom: journalist push to valiantceo.com reported "Avatar write completed, but the active provider did not return the expected public image"; the author kept a generic placeholder avatar.
+- Impact: every site running One User Avatar with a non-`wp_` table prefix (valiantceo.com uses `TrhGhvqp_`) could not receive a journalist photo.
+- Root cause: the legacy provider wrote only the unprefixed `wp_user_avatar` key. One User Avatar reads `$wpdb->get_blog_prefix() . 'user_avatar'`, so get_avatar() fell back to Gravatar, verification failed and the write rolled back. Simple User Avatar sites read the unprefixed key and were unaffected.
+- Patch: the legacy branch also writes and clears the blog-prefixed `user_avatar` key.
+- Guard: comment `CRITICAL — see BUGLOG.md WORDPRESS-AVATAR-001` on the write.

@@ -212,6 +212,8 @@ if ($mediaId > 0) {
         update_user_meta($userId, "simple_local_avatar_rating", "G");
     } else {
         update_user_meta($userId, "wp_user_avatar", $mediaId);
+        // CRITICAL — see BUGLOG.md WORDPRESS-AVATAR-001. One User Avatar reads the table-prefixed key.
+        update_user_meta($userId, $GLOBALS["wpdb"]->get_blog_prefix() . "user_avatar", $mediaId);
         update_user_meta($userId, "wp_user_avatars", hexa_build_legacy_avatar_payload($mediaId, $fullUrl));
         update_user_meta($userId, "wp_user_avatars_rating", "G");
     }
@@ -219,6 +221,7 @@ if ($mediaId > 0) {
     delete_user_meta($userId, "simple_local_avatar");
     delete_user_meta($userId, "simple_local_avatar_rating");
     delete_user_meta($userId, "wp_user_avatar");
+    delete_user_meta($userId, $GLOBALS["wpdb"]->get_blog_prefix() . "user_avatar");
     delete_user_meta($userId, "wp_user_avatars");
     delete_user_meta($userId, "wp_user_avatars_rating");
     if ($simpleConfigured) do_action("simple_local_avatar_deleted", $userId);
