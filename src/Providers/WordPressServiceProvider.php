@@ -58,7 +58,10 @@ class WordPressServiceProvider extends ServiceProvider
         $this->loadViewsFrom(__DIR__ . "/../../resources/views", "wordpress");
         $this->loadMigrationsFrom(__DIR__ . "/../../database/migrations");
         if ($this->app->runningInConsole()) {
-            $this->commands([\hexa_package_wordpress\Console\AuthorizeApplicationPasswordCommand::class]);
+            $this->commands([
+                \hexa_package_wordpress\Console\AuthorizeApplicationPasswordCommand::class,
+                \hexa_package_wordpress\Console\PublishSuppliedPostCommand::class,
+            ]);
         }
 
         app(PackageAssetRegistry::class)->register("wordpress", dirname(__DIR__, 2) . "/resources/js", [
