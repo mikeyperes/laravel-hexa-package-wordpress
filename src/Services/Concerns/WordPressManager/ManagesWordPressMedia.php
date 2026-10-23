@@ -203,6 +203,18 @@ trait ManagesWordPressMedia
         ];
     }
 
+    /** The public web address of one uploaded attachment, or an empty string. */
+    public function attachmentUrl(array $target, int $mediaId): string
+    {
+        $target = $this->normalizeTarget($target);
+        if ($this->usesWpToolkit($target)) {
+            return $this->wpCliAttachmentUrl($target, $mediaId);
+        }
+        $url = (string) ($this->getMedia($target, $mediaId)['data']['source_url'] ?? '');
+
+        return filter_var($url, FILTER_VALIDATE_URL) ? $url : '';
+    }
+
     public function deleteMedia(array $target, int $mediaId, bool $force = true): array
     {
         $target = $this->normalizeTarget($target);

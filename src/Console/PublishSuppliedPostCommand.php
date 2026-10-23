@@ -84,6 +84,12 @@ class PublishSuppliedPostCommand extends Command
             if (! ($result['success'] ?? false) || $mediaId <= 0) {
                 return $this->emit(['success' => false, 'stage' => 'upload', 'image' => $image['key'], 'uploaded' => $uploaded, 'error' => $result['message'] ?? 'The photo upload failed.']);
             }
+            if (! filter_var($url, FILTER_VALIDATE_URL) || ! preg_match('#^https?://#i', $url)) {
+                $url = $wordpress->attachmentUrl($target, $mediaId);
+            }
+            if ($url === '') {
+                return $this->emit(['success' => false, 'stage' => 'upload', 'image' => $image['key'], 'uploaded' => $uploaded, 'error' => 'The photo was uploaded but its web address could not be read.']);
+            }
             $uploaded[] = ['key' => $image['key'], 'media_id' => $mediaId, 'url' => $url];
             if ($image['featured'] ?? false) {
                 $featuredId = $mediaId;
@@ -108,13 +114,20 @@ class PublishSuppliedPostCommand extends Command
             $options[$field] = array_values(array_map('intval', (array) ($terms['term_ids'] ?? [])));
         }
 
+        // A new post is saved as a draft with its featured image first and only
+        // then moved to its final status. Featured-image plugins (Featured Image
+        // from URL) replaced the featured image when a post was created and
+        // published in one write; the same publish as a separate update kept it.
         $postId = (int) ($packet['post_id'] ?? 0);
         $result = $postId > 0
             ? $wordpress->updatePost($target, $postId, $options + ['title' => $packet['title'], 'content' => $content, 'status' => $packet['status']])
-            : $wordpress->createPost($target, $packet['title'], $content, $packet['status'], $options);
+            : $wordpress->createPost($target, $packet['title'], $content, 'draft', $options);
         $postId = $postId > 0 ? $postId : (int) ($result['post_id'] ?? $result['data']['post_id'] ?? $result['data']['id'] ?? $result['id'] ?? 0);
+        if (($result['success'] ?? false) && ! ((int) ($packet['post_id'] ?? 0) > 0) && $packet['status'] !== 'draft' && $postId > 0) {
+            $result = $wordpress->updatePost($target, $postId, array_filter(['status' => $packet['status'], 'featured_media' => $featuredId]));
+        }
         if (! ($result['success'] ?? false) || $postId <= 0) {
-            return $this->emit(['success' => false, 'stage' => 'post', 'uploaded' => $uploaded, 'post_id' => $postId ?: null, 'error' => $result['message'] ?? 'The post write failed.']);
+            return $this->emit(['success' => false, 'stage' => 'post', 'uploaded' => $uploaded, 'post_id' => $postId ?: null, 'error' => $result['message'] ?? 'The post write failed.', 'details' => $result['data'] ?? null]);
         }
 
         $link = $wordpress->getPublicPostUrl($target, $postId);
