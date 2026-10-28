@@ -481,3 +481,11 @@ Severity: High. Consumers lacked an authoritative anonymous draft URL and substi
 - Root cause: the legacy provider wrote only the unprefixed `wp_user_avatar` key. One User Avatar reads `$wpdb->get_blog_prefix() . 'user_avatar'`, so get_avatar() fell back to Gravatar, verification failed and the write rolled back. Simple User Avatar sites read the unprefixed key and were unaffected.
 - Patch: the legacy branch also writes and clears the blog-prefixed `user_avatar` key.
 - Guard: comment `CRITICAL — see BUGLOG.md WORDPRESS-AVATAR-001` on the write.
+
+## WORDPRESS-AVATAR-002 — New author photo hidden by an older avatar key on Simple Local Avatars sites
+
+- Symptom: a new journalist photo was saved and reported verified, but the site kept showing the old photo (investcourier.com, Jerome Knyszewski, 2026-10-28).
+- Impact: author pages and contributor lists show an outdated portrait.
+- Root cause: on Simple Local Avatars sites only `simple_local_avatar` was written; an older `wp_user_avatar` key from a previous avatar plugin stayed and is read first by other readers (SMP's author photo resolver).
+- Patch: when those older keys exist, they are pointed at the new photo in the same write.
+- Guard: comment `CRITICAL — see BUGLOG.md WORDPRESS-AVATAR-002` on the write.

@@ -210,6 +210,12 @@ if ($mediaId > 0) {
             do_action("simple_local_avatar_updated", $userId);
         }
         update_user_meta($userId, "simple_local_avatar_rating", "G");
+        // CRITICAL — see BUGLOG.md WORDPRESS-AVATAR-002. Older avatar keys left from another avatar
+        // plugin outrank Simple Local Avatars in some readers; point any that exist at the new photo.
+        $legacyPrefixed = $GLOBALS["wpdb"]->get_blog_prefix() . "user_avatar";
+        if (metadata_exists("user", $userId, "wp_user_avatar")) update_user_meta($userId, "wp_user_avatar", $mediaId);
+        if (metadata_exists("user", $userId, $legacyPrefixed)) update_user_meta($userId, $legacyPrefixed, $mediaId);
+        if (metadata_exists("user", $userId, "wp_user_avatars")) update_user_meta($userId, "wp_user_avatars", hexa_build_legacy_avatar_payload($mediaId, $fullUrl));
     } else {
         update_user_meta($userId, "wp_user_avatar", $mediaId);
         // CRITICAL — see BUGLOG.md WORDPRESS-AVATAR-001. One User Avatar reads the table-prefixed key.
