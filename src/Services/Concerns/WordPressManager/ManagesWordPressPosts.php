@@ -364,6 +364,7 @@ PHP;
                 '    "slug"=>(string) get_post_field("post_name", $postId),',
                 '    "title"=>["rendered"=>(string) get_the_title($postId)],',
                 '    "author"=>(int) get_post_field("post_author", $postId),',
+                '    "featured_media"=>(int) get_post_thumbnail_id($postId),',
                 '  ];',
                 '}',
                 'echo "HEXA_POST_LIST:" . wp_json_encode($rows);',
