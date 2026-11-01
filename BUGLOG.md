@@ -496,3 +496,8 @@ Severity: High. Consumers lacked an authoritative anonymous draft URL and substi
 - Root cause: the evaluator trusted shell status without a receipt from the submitted program.
 - Patch: flushed begin/end receipts around nested evaluation, removed from returned output. Only a completed exit-0 process with empty output may use one documented Toolkit pre-execution recovery route; any started payload, nonzero failure or transport uncertainty is never replayed.
 - Guard: WordPressEvalExecutionTest covers false clean exits, recovery, receipt stripping, partial payloads, transport failures and a second route that also fails to execute.
+
+## WORDPRESS-EVAL-003 (high): output trimming removed receipt boundary whitespace
+- Root cause: the lower execution owner trims stdout, while receipt detection originally included outer newlines. Valid execution could therefore be mislabeled as not executed.
+- Patch: identify the bound receipt tokens independently of transport whitespace, strip only their complete lines, and retain framed caller output.
+- Guard: WordPressEvalExecutionTest covers trimmed stdout, receipt completion and unchanged payload frames.

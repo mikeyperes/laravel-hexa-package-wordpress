@@ -260,11 +260,11 @@ trait ManagesWordPressMedia
         // CRITICAL - see BUGLOG.md WORDPRESS-EVAL-002
         // Receipts distinguish a completed shell from execution of this exact payload.
         $receipt = bin2hex(random_bytes(16));
-        $begin = "\nHEXA_EVAL_BEGIN:".$receipt."\n";
-        $end = "\nHEXA_EVAL_END:".$receipt."\n";
-        $wrapped = 'echo '.var_export($begin,true).'; if (defined("STDOUT")) { fflush(STDOUT); } '
+        $begin = "HEXA_EVAL_BEGIN:".$receipt;
+        $end = "HEXA_EVAL_END:".$receipt;
+        $wrapped = 'echo '.var_export("\n".$begin."\n",true).'; if (defined("STDOUT")) { fflush(STDOUT); } '
             .'eval(base64_decode('.var_export(base64_encode($php),true).')); '
-            .'echo '.var_export($end,true).'; if (defined("STDOUT")) { fflush(STDOUT); }';
+            .'echo '.var_export("\n".$end."\n",true).'; if (defined("STDOUT")) { fflush(STDOUT); }';
         $native = method_exists($this->wptoolkit, 'wpCliEvalWithPlugins')
             ? $this->wptoolkit->wpCliEvalWithPlugins($target['server'],(int)$target['install_id'],$wrapped,120)
             : $this->wptoolkit->wpCliEval($target['server'],(int)$target['install_id'],$wrapped);
@@ -282,7 +282,9 @@ trait ManagesWordPressMedia
         } else {$result=$native;$result['execution_route']='native';}
         $stdout=(string)($result['stdout']??'');$started=str_contains($stdout,$begin);$completed=$started&&str_contains($stdout,$end);
         $result['evaluation_started']=$started;$result['evaluation_completed']=$completed;
-        $result['stdout']=str_replace([$begin,$end],'',$stdout);
+        $clean=preg_replace('/(?:^|\\r?\\n)'.preg_quote($begin,'/').'(?:\\r?\\n|$)/',"\n",$stdout);
+        $clean=preg_replace('/(?:^|\\r?\\n)'.preg_quote($end,'/').'(?:\\r?\\n|$)/',"\n",$clean);
+        $result['stdout']=trim($clean);
         if (!$started || !$completed) {
             $result['success']=false;$result['error_code']=$started?'evaluation_incomplete':'evaluation_not_executed';
             if (($result['exit_code']??null)===0) $result['message']=$started?'WordPress evaluation started but did not finish.':'WordPress bootstrap ended before the submitted program executed.';

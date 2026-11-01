@@ -82,4 +82,9 @@ class WordPressEvalExecutionTest extends TestCase
         $tk=$this->createMock(WpToolkitService::class);$tk->method('wpCliEvalWithPlugins')->willReturn(['success'=>true,'exit_code'=>0,'stdout'=>'']);$tk->method('wpCliRaw')->willReturn(['success'=>true,'exit_code'=>0,'stdout'=>'']);$r=$this->managerFor($tk)->evaluatePhp([],'echo "x";');$this->assertFalse($r['success']);$this->assertSame('evaluation_not_executed',$r['error_code']);
     }
 
+    public function test_trimmed_native_output_still_has_valid_receipts_and_preserves_the_payload():void
+    {
+        $tk=$this->createMock(WpToolkitService::class);$tk->method('wpCliEvalWithPlugins')->willReturnCallback(function($server,$id,$code){preg_match('/HEXA_EVAL_BEGIN:([a-f0-9]{32})/',$code,$m);return ['success'=>true,'exit_code'=>0,'stdout'=>trim("\nHEXA_EVAL_BEGIN:$m[1]\nHWS_FORMS:{\"forms\":[]}\nHWS_FORMS_END\nHEXA_EVAL_END:$m[1]\n")];});$tk->expects($this->never())->method('wpCliRaw');$r=$this->managerFor($tk)->evaluatePhp([],'echo "json";');$this->assertTrue($r['success']);$this->assertTrue($r['evaluation_started']);$this->assertTrue($r['evaluation_completed']);$this->assertSame("HWS_FORMS:{\"forms\":[]}\nHWS_FORMS_END",$r['stdout']);
+    }
+
 }

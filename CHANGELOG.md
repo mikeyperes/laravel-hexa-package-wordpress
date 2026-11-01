@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.11.5 - 2026-11-01
+
+- WORDPRESS-EVAL-003: recognize execution receipts after transport stdout trimming and preserve the caller payload.
+
 ## 2.11.4 - 2026-11-01
 
 - WORDPRESS-EVAL-002: begin/end execution receipts reject false clean exits and incomplete evaluation. One explicit shared pre-execution recovery route handles completed empty native bootstraps; started/uncertain payloads are never replayed.

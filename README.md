@@ -76,3 +76,5 @@ logged there in the same commit as their patch.
 `WordPressManagerService::evaluatePhp` is the shared owner for plugin-loaded evaluation. Each submitted program has flushed begin/end receipts; a zero shell exit alone never proves execution. Receipts are removed from returned user output. Started or uncertain payloads are never replayed, preserving mutation safety.
 
 One deliberate second route is allowed here: a native process that completes with exit 0 and entirely empty output did not reach the begin receipt. The shared evaluator then makes one WP Toolkit CLI attempt, recording `execution_route`, `native_exit_code`, `evaluation_started` and `evaluation_completed`. It never retries a partial payload, a nonzero native failure or an uncertain transport result. Consumers call this evaluator once and do not implement transport fallbacks.
+
+Receipt matching is independent of transport boundary whitespace; only complete bound receipt lines are removed from caller output.
