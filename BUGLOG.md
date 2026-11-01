@@ -489,3 +489,10 @@ Severity: High. Consumers lacked an authoritative anonymous draft URL and substi
 - Root cause: on Simple Local Avatars sites only `simple_local_avatar` was written; an older `wp_user_avatar` key from a previous avatar plugin stayed and is read first by other readers (SMP's author photo resolver).
 - Patch: when those older keys exist, they are pointed at the new photo in the same write.
 - Guard: comment `CRITICAL — see BUGLOG.md WORDPRESS-AVATAR-002` on the write.
+
+## WORDPRESS-EVAL-002 (high): a clean native shell exit did not prove evaluation
+- Symptom: native evaluation could return success/exit 0 with no output although a simple marker program never ran.
+- Impact: consumers could mistake skipped reads or writes for successful work.
+- Root cause: the evaluator trusted shell status without a receipt from the submitted program.
+- Patch: flushed begin/end receipts around nested evaluation, removed from returned output. Only a completed exit-0 process with empty output may use one documented Toolkit pre-execution recovery route; any started payload, nonzero failure or transport uncertainty is never replayed.
+- Guard: WordPressEvalExecutionTest covers false clean exits, recovery, receipt stripping, partial payloads, transport failures and a second route that also fails to execute.

@@ -257,23 +257,37 @@ trait ManagesWordPressMedia
             return ['success' => false, 'message' => 'PHP evaluation is only available on WP Toolkit targets.', 'stdout' => ''];
         }
 
-        if (method_exists($this->wptoolkit, 'wpCliEvalWithPlugins')) {
-            // A failed native evaluation may already have committed mutations before
-            // WordPress shutdown hooks return a non-zero exit code. Replaying the same
-            // PHP through WP Toolkit can duplicate writes and also runs without the
-            // target site's complete plugin/taxonomy registry. Return the first result
-            // to the caller so marked output can be interpreted exactly once.
-            return $this->wptoolkit->wpCliEvalWithPlugins(
-                $target['server'],
-                (int) $target['install_id'],
-                $php,
-                120,
-            );
+        // CRITICAL - see BUGLOG.md WORDPRESS-EVAL-002
+        // Receipts distinguish a completed shell from execution of this exact payload.
+        $receipt = bin2hex(random_bytes(16));
+        $begin = "\nHEXA_EVAL_BEGIN:".$receipt."\n";
+        $end = "\nHEXA_EVAL_END:".$receipt."\n";
+        $wrapped = 'echo '.var_export($begin,true).'; if (defined("STDOUT")) { fflush(STDOUT); } '
+            .'eval(base64_decode('.var_export(base64_encode($php),true).')); '
+            .'echo '.var_export($end,true).'; if (defined("STDOUT")) { fflush(STDOUT); }';
+        $native = method_exists($this->wptoolkit, 'wpCliEvalWithPlugins')
+            ? $this->wptoolkit->wpCliEvalWithPlugins($target['server'],(int)$target['install_id'],$wrapped,120)
+            : $this->wptoolkit->wpCliEval($target['server'],(int)$target['install_id'],$wrapped);
+        $stdout = (string)($native['stdout']??'');
+        $started = str_contains($stdout,$begin);
+        // A deliberately documented second route, owned here, never in consumers:
+        // only a completed native process with empty output proves bootstrap ended
+        // before the flushed begin receipt. Transport failures and partial payloads
+        // remain uncertain and are never replayed.
+        if (!$started && ($native['exit_code']??null)===0 && trim($stdout)==='') {
+            $result=$this->wptoolkit->wpCliRaw($target['server'],(int)$target['install_id'],'eval '.escapeshellarg($wrapped),120);
+            $result['execution_route']='toolkit_pre_execution_recovery';
+            $result['native_exit_code']=0;
+            $result['native_failure']='Native WordPress bootstrap exited cleanly before evaluating the submitted program.';
+        } else {$result=$native;$result['execution_route']='native';}
+        $stdout=(string)($result['stdout']??'');$started=str_contains($stdout,$begin);$completed=$started&&str_contains($stdout,$end);
+        $result['evaluation_started']=$started;$result['evaluation_completed']=$completed;
+        $result['stdout']=str_replace([$begin,$end],'',$stdout);
+        if (!$started || !$completed) {
+            $result['success']=false;$result['error_code']=$started?'evaluation_incomplete':'evaluation_not_executed';
+            if (($result['exit_code']??null)===0) $result['message']=$started?'WordPress evaluation started but did not finish.':'WordPress bootstrap ended before the submitted program executed.';
         }
-
-        // Compatibility for older toolkit packages that do not expose the native
-        // plugin-loaded evaluator. This remains a single execution path.
-        return $this->wptoolkit->wpCliEval($target['server'], (int) $target['install_id'], $php);
+        return $result;
     }
 
     private function ensureToolkitTerms(array $target, array $names, string $taxonomy): array

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.11.4 - 2026-11-01
+
+- WORDPRESS-EVAL-002: begin/end execution receipts reject false clean exits and incomplete evaluation. One explicit shared pre-execution recovery route handles completed empty native bootstraps; started/uncertain payloads are never replayed.
+
 ## 2.11.3 - 2026-10-30
 
 - Post lists read through WP Toolkit now include each post's featured image ID, as the REST lists already did, so an author audit can flag posts without one.
