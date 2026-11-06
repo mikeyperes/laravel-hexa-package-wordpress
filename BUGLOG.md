@@ -4,6 +4,14 @@ Permanent record of critical and high-severity article campaign bugs involving
 WordPress delivery and verification in this package. Bug IDs are shared with the
 [laravel-hexa-app-publish BUGLOG](https://github.com/mikeyperes/laravel-hexa-app-publish/blob/main/BUGLOG.md).
 
+## WORDPRESS-AVATAR-003 — Setting one author photo cleared the whole site's cache
+
+- **Symptom:** `profiles:journalist-photo` for Celebrity Leader Staff (2026-11-06 01:16 EST) ran `wp_cache_flush` and `litespeed_purge_all` on celebrityleader.com.
+- **Impact:** every author photo change emptied the full page cache of the site, which the owner forbids; every visitor then hit uncached pages.
+- **Root cause:** `UserAvatarDestination::purgeCache` called the site-wide purge.
+- **Patch:** it now calls `WordPressMediaGateway::purgeAuthorCache`, which clears only that user's object cache and their author page URL in LiteSpeed, with no site-wide fallback.
+- **Guard:** comments in `UserAvatarDestination::purgeCache` and `purgeAuthorCache` point here.
+
 ## WORDPRESS-POST-001 — Pending Review posts lost their slug on WP Toolkit sites
 
 - **Severity:** High

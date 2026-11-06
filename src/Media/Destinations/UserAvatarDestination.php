@@ -62,9 +62,10 @@ final class UserAvatarDestination implements WordPressMediaDestination, CacheAwa
         ];
     }
 
+    /** Only this author's cache is cleared, never the whole site. See BUGLOG.md WORDPRESS-AVATAR-003. */
     public function purgeCache(WordPressMediaGateway $gateway, array $target): array
     {
-        return $gateway->purgeSiteCache($target);
+        return $gateway->purgeAuthorCache($target, $this->userId);
     }
 
     public function rollback(WordPressMediaGateway $gateway, array $target, array $previous): array

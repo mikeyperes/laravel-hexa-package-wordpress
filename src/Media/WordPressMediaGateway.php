@@ -324,6 +324,33 @@ final class WordPressMediaGateway
         ]);
     }
 
+    /**
+     * Clear one author's object cache and their author page in LiteSpeed.
+     * It never falls back to a whole-site purge. See BUGLOG.md WORDPRESS-AVATAR-003.
+     */
+    public function purgeAuthorCache(array $target, int $userId): array
+    {
+        if ($userId <= 0) {
+            return ["success" => false, "message" => "A WordPress user ID is required for cache invalidation.", "actions" => []];
+        }
+
+        $php = '$userId=' . $userId . ';$actions=[];$warnings=[];'
+            . 'if(function_exists("clean_user_cache")){clean_user_cache($userId);$actions[]="clean_user_cache";}'
+            . '$url=(string)get_author_posts_url($userId);'
+            . '$active=(array)get_option("active_plugins",[]);$litespeed=in_array("litespeed-cache/litespeed-cache.php",$active,true)||defined("LSCWP_V");'
+            . 'if($litespeed&&$url!==""&&has_action("litespeed_purge_url")){ob_start();do_action("litespeed_purge_url",$url);ob_end_clean();$actions[]="litespeed_purge_url";}'
+            . 'elseif($litespeed){$warnings[]="LiteSpeed has no targeted purge hook here; the author page refreshes on its own schedule.";}'
+            . 'echo "HEXA_AUTHOR_CACHE_PURGE:".wp_json_encode(["success"=>true,"author_url"=>$url,"actions"=>$actions,"warnings"=>$warnings,"litespeed_detected"=>$litespeed]);';
+        $result = $this->wordpress->evaluatePhp($target, $php);
+        $payload = ($result["success"] ?? false) ? $this->decode((string) ($result["stdout"] ?? ""), "HEXA_AUTHOR_CACHE_PURGE:") : null;
+        if (!is_array($payload)) {
+            return ["success" => false, "message" => (string) ($result["message"] ?? "Author cache invalidation failed."), "actions" => []];
+        }
+        $payload["message"] = count((array) ($payload["actions"] ?? [])) . " author cache action(s) requested.";
+
+        return $payload;
+    }
+
     public function purgeSiteCache(array $target): array
     {
         return $this->wordpress->purgeSiteCache($target);
