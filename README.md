@@ -78,3 +78,15 @@ logged there in the same commit as their patch.
 One deliberate second route is allowed here: a native process that completes with exit 0 and entirely empty output did not reach the begin receipt. The shared evaluator then makes one WP Toolkit CLI attempt, recording `execution_route`, `native_exit_code`, `evaluation_started` and `evaluation_completed`. It never retries a partial payload, a nonzero native failure or an uncertain transport result. Consumers call this evaluator once and do not implement transport fallbacks.
 
 Receipt matching is independent of transport boundary whitespace; only complete bound receipt lines are removed from caller output.
+
+## Author address changes
+
+`WordPressManagerService::changeAuthorSlug($target, $userId, $newSlug, $redirectFrom = [])`
+changes one author page address (`/author/<slug>/`, the user's `user_nicename`)
+on a WP Toolkit site. The login, posts and profile stay the same. Every earlier
+address gets a permanent (301) redirect in Rank Math's redirect manager, which
+is switched on when it is off. It refuses an address another user owns or one
+a Rank Math redirect already sends elsewhere, and undoes the change when the
+redirect cannot be saved. Only the old and new author pages are cleared from
+LiteSpeed; the site cache is never purged. Profiles calls it from
+`profiles:journalist-author-address`.

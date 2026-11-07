@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.12.0 - 2026-11-07
+
+- `changeAuthorSlug()` changes one author page address and keeps every earlier address redirecting (301) through Rank Math's redirect manager, clearing only those two author pages from LiteSpeed.
+
 ## 2.11.5 - 2026-11-01
 
 - WORDPRESS-EVAL-003: recognize execution receipts after transport stdout trimming and preserve the caller payload.
