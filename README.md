@@ -90,3 +90,7 @@ a Rank Math redirect already sends elsewhere, and undoes the change when the
 redirect cannot be saved. Only the old and new author pages are cleared from
 LiteSpeed; the site cache is never purged. Profiles calls it from
 `profiles:journalist-author-address`.
+
+### Author photo delivery
+
+Require active Simple Local Avatars, reject competing providers, never write legacy avatar keys, remove outgoing SLA derivatives on rollback and expose served photo URLs.

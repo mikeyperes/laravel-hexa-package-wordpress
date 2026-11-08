@@ -43,16 +43,6 @@ if (!function_exists("hexa_avatar_payload_media_id")) {
         return is_array($data) && !empty($data["media_id"]) ? (int) $data["media_id"] : 0;
     }
 }
-if (!function_exists("hexa_build_legacy_avatar_payload")) {
-    function hexa_build_legacy_avatar_payload(int $mediaId, string $fullUrl): array {
-        $payload = ["media_id" => $mediaId, "site_id" => get_current_blog_id(), "full" => $fullUrl];
-        foreach ([24, 48, 96, 250, 256, 500] as $size) {
-            $source = wp_get_attachment_image_src($mediaId, [$size, $size]);
-            $payload[$size] = is_array($source) && !empty($source[0]) ? (string) $source[0] : $fullUrl;
-        }
-        return $payload;
-    }
-}
 if (!function_exists("hexa_avatar_upload_path")) {
     function hexa_avatar_upload_path(string $url): string {
         if ($url === "" || !filter_var($url, FILTER_VALIDATE_URL)) return "";
@@ -175,8 +165,8 @@ if ($userId <= 0 || !get_userdata($userId)) {
     echo "HEXA_USER_AVATAR:" . wp_json_encode(["success" => false, "message" => "WordPress user was not found.", "provider" => $provider]);
     return;
 }
-if ($simpleConfigured && !$simpleAvailable) {
-    echo "HEXA_USER_AVATAR:" . wp_json_encode(["success" => false, "message" => "Simple Local Avatars is active but its assignment API is unavailable.", "provider" => $provider]);
+if (!$simpleConfigured || $conflictingAvatarPlugins !== [] || !$simpleAvailable) {
+    echo "HEXA_USER_AVATAR:" . wp_json_encode(["success" => false, "message" => $avatarProviderError, "provider" => $provider]);
     return;
 }
 
@@ -202,6 +192,14 @@ if ($mediaId > 0) {
         if ($previousSimpleMediaId === $mediaId) {
             $assignmentReused = true;
         } else {
+            // CRITICAL - see BUGLOG.md WORDPRESS-AVATAR-004.
+            if (is_array($previousSimple)) {
+                foreach ($previousSimple as $size => $derivativeUrl) {
+                    if (!is_numeric($size) || !is_string($derivativeUrl)) continue;
+                    $path = hexa_avatar_upload_path($derivativeUrl);
+                    if ($path !== "" && $path !== hexa_avatar_upload_path((string) ($previousSimple["full"] ?? "")) && is_file($path)) wp_delete_file($path);
+                }
+            }
             update_user_meta($userId, "simple_local_avatar", [
                 "media_id" => $mediaId,
                 "full" => $fullUrl,
@@ -210,26 +208,19 @@ if ($mediaId > 0) {
             do_action("simple_local_avatar_updated", $userId);
         }
         update_user_meta($userId, "simple_local_avatar_rating", "G");
-        // CRITICAL — see BUGLOG.md WORDPRESS-AVATAR-002. Older avatar keys left from another avatar
-        // plugin outrank Simple Local Avatars in some readers; point any that exist at the new photo.
-        $legacyPrefixed = $GLOBALS["wpdb"]->get_blog_prefix() . "user_avatar";
-        if (metadata_exists("user", $userId, "wp_user_avatar")) update_user_meta($userId, "wp_user_avatar", $mediaId);
-        if (metadata_exists("user", $userId, $legacyPrefixed)) update_user_meta($userId, $legacyPrefixed, $mediaId);
-        if (metadata_exists("user", $userId, "wp_user_avatars")) update_user_meta($userId, "wp_user_avatars", hexa_build_legacy_avatar_payload($mediaId, $fullUrl));
-    } else {
-        update_user_meta($userId, "wp_user_avatar", $mediaId);
-        // CRITICAL — see BUGLOG.md WORDPRESS-AVATAR-001. One User Avatar reads the table-prefixed key.
-        update_user_meta($userId, $GLOBALS["wpdb"]->get_blog_prefix() . "user_avatar", $mediaId);
-        update_user_meta($userId, "wp_user_avatars", hexa_build_legacy_avatar_payload($mediaId, $fullUrl));
-        update_user_meta($userId, "wp_user_avatars_rating", "G");
     }
 } else {
+    // CRITICAL - see BUGLOG.md WORDPRESS-AVATAR-004. Delete only derivatives of
+    // the outgoing attachment; attachment deletion alone does not know SLA sizes.
+    if (is_array($previousSimple) && $previousSimpleMediaId !== $mediaId) {
+        foreach ($previousSimple as $size => $derivativeUrl) {
+            if (!is_numeric($size) || !is_string($derivativeUrl)) continue;
+            $path = hexa_avatar_upload_path($derivativeUrl);
+            if ($path !== "" && $path !== hexa_avatar_upload_path((string) ($previousSimple["full"] ?? "")) && is_file($path)) wp_delete_file($path);
+        }
+    }
     delete_user_meta($userId, "simple_local_avatar");
     delete_user_meta($userId, "simple_local_avatar_rating");
-    delete_user_meta($userId, "wp_user_avatar");
-    delete_user_meta($userId, $GLOBALS["wpdb"]->get_blog_prefix() . "user_avatar");
-    delete_user_meta($userId, "wp_user_avatars");
-    delete_user_meta($userId, "wp_user_avatars_rating");
     if ($simpleConfigured) do_action("simple_local_avatar_deleted", $userId);
 }
 
@@ -304,38 +295,18 @@ try {
     }
 } catch (Throwable $exception) {
     $avatarRuntimeWarning = "Avatar derivative generation threw " . get_class($exception) . ": " . $exception->getMessage();
-    $fallbackUrl = $mediaId > 0 ? (string) wp_get_attachment_url($mediaId) : "";
-    $sourceIntegrity = $fallbackUrl !== "" ? hexa_avatar_image_integrity($fallbackUrl) : ["ok" => false];
-    if (!($sourceIntegrity["ok"] ?? false)) {
-        echo "HEXA_USER_AVATAR:" . wp_json_encode([
-            "success" => false,
-            "message" => $avatarRuntimeWarning,
-            "provider" => $provider,
-            "avatar_integrity" => ["source" => $sourceIntegrity],
-        ]);
-        return;
-    }
-    $avatar96 = $fallbackUrl;
-    $avatar250 = $fallbackUrl;
-    $avatarHtml = '<img src="' . esc_url($fallbackUrl) . '" class="avatar avatar-250 photo" width="250" height="250" alt="">';
-    $avatarIntegrity = [
-        "source" => $sourceIntegrity,
-        "96" => $sourceIntegrity,
-        "250" => $sourceIntegrity,
-        "cached_sizes" => [],
-    ];
-    $avatarRepair = [
-        "attempted" => false,
-        "deleted" => [],
-        "reason" => "verified_source_fallback_after_derivative_failure",
-    ];
+    echo "HEXA_USER_AVATAR:" . wp_json_encode([
+        "success" => false,
+        "message" => $avatarRuntimeWarning,
+        "provider" => $provider,
+    ]);
+    return;
 }
 
 $simpleStored = get_user_meta($userId, "simple_local_avatar", true);
 $legacyStored = get_user_meta($userId, "wp_user_avatars", true);
-$stored = $simpleConfigured ? $simpleStored : $legacyStored;
+$stored = $simpleStored;
 $storedMediaId = hexa_avatar_payload_media_id($stored);
-if (!$simpleConfigured && $storedMediaId <= 0) $storedMediaId = (int) get_user_meta($userId, "wp_user_avatar", true);
 $storedUrl = hexa_avatar_payload_url($stored);
 $publicAvatarOk = $mediaId <= 0 || (
     filter_var($avatar96, FILTER_VALIDATE_URL)
@@ -415,9 +386,6 @@ if (!function_exists("hexa_simple_local_avatars_instance")) {
         $pluginFile = defined("WP_PLUGIN_DIR")
             ? WP_PLUGIN_DIR . "/simple-local-avatars/simple-local-avatars.php"
             : "";
-        if (!class_exists("Simple_Local_Avatars") && $pluginFile !== "" && is_readable($pluginFile)) {
-            require_once $pluginFile;
-        }
 
         $candidate = $GLOBALS["simple_local_avatars"] ?? null;
         if (
@@ -448,14 +416,28 @@ if (!function_exists("hexa_simple_local_avatars_instance")) {
     }
 }
 
-$simple = hexa_simple_local_avatars_instance();
+// CRITICAL - see BUGLOG.md WORDPRESS-AVATAR-004. Only an active supported
+// provider may accept writes; a fallback image is not provider verification.
+$activePlugins = array_values(array_unique(array_merge(
+    (array) get_option("active_plugins", []),
+    array_keys((array) get_site_option("active_sitewide_plugins", [])),
+)));
+$avatarPlugins = [
+    "simple-local-avatars/simple-local-avatars.php" => "Simple Local Avatars",
+    "simple-user-avatar/simple-user-avatar.php" => "Simple User Avatar",
+    "one-user-avatar/one-user-avatar.php" => "One User Avatar",
+    "wp-user-avatar/wp-user-avatar.php" => "WP User Avatar",
+];
+$conflictingAvatarPlugins = array_values(array_intersect(array_keys($avatarPlugins), $activePlugins));
+$conflictingAvatarPlugins = array_values(array_diff($conflictingAvatarPlugins, ["simple-local-avatars/simple-local-avatars.php"]));
+$simpleConfigured = in_array("simple-local-avatars/simple-local-avatars.php", $activePlugins, true);
+$simple = $simpleConfigured ? hexa_simple_local_avatars_instance() : null;
 $simpleAvailable = is_object($simple);
-$activePlugins = (array) get_option("active_plugins", []);
-$networkPlugins = (array) get_site_option("active_sitewide_plugins", []);
-$simpleConfigured = $simpleAvailable
-    || in_array("simple-local-avatars/simple-local-avatars.php", $activePlugins, true)
-    || array_key_exists("simple-local-avatars/simple-local-avatars.php", $networkPlugins);
-$provider = $simpleConfigured ? "simple_local_avatars" : "legacy_avatar_meta";
+$provider = $simpleConfigured && $conflictingAvatarPlugins === [] ? "simple_local_avatars" : "unsupported_avatar_provider";
+$avatarProviderError = $conflictingAvatarPlugins !== []
+    ? "Unsupported avatar plugin active: " . implode(", ", array_map(static fn($slug) => $avatarPlugins[$slug], $conflictingAvatarPlugins)) . ". Deactivate it and activate Simple Local Avatars, the only supported photo plugin."
+    : (!$simpleConfigured ? "No supported avatar plugin is active. Activate Simple Local Avatars, the only supported photo plugin."
+        : "Simple Local Avatars is active but its assignment API is unavailable.");
 PHP;
     }
 

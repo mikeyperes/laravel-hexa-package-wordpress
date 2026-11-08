@@ -488,7 +488,7 @@ Severity: High. Consumers lacked an authoritative anonymous draft URL and substi
 - Impact: every site running One User Avatar with a non-`wp_` table prefix (valiantceo.com uses `TrhGhvqp_`) could not receive a journalist photo.
 - Root cause: the legacy provider wrote only the unprefixed `wp_user_avatar` key. One User Avatar reads `$wpdb->get_blog_prefix() . 'user_avatar'`, so get_avatar() fell back to Gravatar, verification failed and the write rolled back. Simple User Avatar sites read the unprefixed key and were unaffected.
 - Patch: the legacy branch also writes and clears the blog-prefixed `user_avatar` key.
-- Guard: comment `CRITICAL — see BUGLOG.md WORDPRESS-AVATAR-001` on the write.
+- Superseded by WORDPRESS-AVATAR-004: One User Avatar is no longer a supported photo destination; writes now reject it explicitly.
 
 ## WORDPRESS-AVATAR-002 — New author photo hidden by an older avatar key on Simple Local Avatars sites
 
@@ -496,7 +496,7 @@ Severity: High. Consumers lacked an authoritative anonymous draft URL and substi
 - Impact: author pages and contributor lists show an outdated portrait.
 - Root cause: on Simple Local Avatars sites only `simple_local_avatar` was written; an older `wp_user_avatar` key from a previous avatar plugin stayed and is read first by other readers (SMP's author photo resolver).
 - Patch: when those older keys exist, they are pointed at the new photo in the same write.
-- Guard: comment `CRITICAL — see BUGLOG.md WORDPRESS-AVATAR-002` on the write.
+- Superseded by WORDPRESS-AVATAR-004: Legacy writes are forbidden; stale keys require explicit cleanup rather than silently updating another plugin.
 
 ## WORDPRESS-EVAL-002 (high): a clean native shell exit did not prove evaluation
 - Symptom: native evaluation could return success/exit 0 with no output although a simple marker program never ran.
@@ -509,3 +509,12 @@ Severity: High. Consumers lacked an authoritative anonymous draft URL and substi
 - Root cause: the lower execution owner trims stdout, while receipt detection originally included outer newlines. Valid execution could therefore be mislabeled as not executed.
 - Patch: identify the bound receipt tokens independently of transport whitespace, strip only their complete lines, and retain framed caller output.
 - Guard: WordPressEvalExecutionTest covers trimmed stdout, receipt completion and unchanged payload frames.
+
+## WORDPRESS-AVATAR-004 - Author photo delivery evidence and cleanup
+
+- Severity: High
+- Symptom: Unsupported avatar plugins appeared to accept photos; failed imports left resized files and photo activity omitted served URLs.
+- Impact: Authors could appear verified through a fallback rather than the selected plugin.
+- Cause: Legacy-key writes and attachment-only deletion did not match the active avatar provider.
+- Patch: Require active Simple Local Avatars, reject competing providers, never write legacy avatar keys, remove outgoing SLA derivatives on rollback and expose served photo URLs.
+- Guard: Provider precondition and outgoing derivative cleanup in the avatar writer; served URLs propagated from assignment to activity.

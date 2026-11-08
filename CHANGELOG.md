@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.12.1 - 2026-11-08
+
+- WORDPRESS-AVATAR-004: Require active Simple Local Avatars, reject competing providers, never write legacy avatar keys, remove outgoing SLA derivatives on rollback and expose served photo URLs.
+
+
 ## 2.12.0 - 2026-11-07
 
 - `changeAuthorSlug()` changes one author page address and keeps every earlier address redirecting (301) through Rank Math's redirect manager, clearing only those two author pages from LiteSpeed.

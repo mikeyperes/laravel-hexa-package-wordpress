@@ -9,6 +9,8 @@ use hexa_package_wordpress\Media\WordPressMediaGateway;
 
 final class UserAvatarDestination implements WordPressMediaDestination, CacheAwareWordPressMediaDestination, RevalidatesCurrentWordPressMediaDestination
 {
+    private array $assignment = [];
+
     public function __construct(public readonly int $userId)
     {
     }
@@ -39,7 +41,7 @@ final class UserAvatarDestination implements WordPressMediaDestination, CacheAwa
 
     public function assign(WordPressMediaGateway $gateway, array $target, int $mediaId): array
     {
-        return $gateway->manager()->setUserAvatar($target, $this->userId, $mediaId > 0 ? $mediaId : null, false);
+        return $this->assignment = $gateway->manager()->setUserAvatar($target, $this->userId, $mediaId > 0 ? $mediaId : null, false);
     }
 
     public function verify(WordPressMediaGateway $gateway, array $target, int $mediaId): array
@@ -53,6 +55,8 @@ final class UserAvatarDestination implements WordPressMediaDestination, CacheAwa
             && ($mediaId > 0 ? $storedId === $mediaId && filter_var($url, FILTER_VALIDATE_URL) : $storedId === 0);
 
         return [
+            "frontend_avatar_url" => (string) ($this->assignment["avatar_result"]["frontend_avatar_url"] ?? ""),
+            "admin_avatar_url" => (string) ($this->assignment["avatar_result"]["admin_avatar_url"] ?? ""),
             "success" => $success,
             "message" => $success ? "Public WordPress avatar provider state verified." : "WordPress avatar assignment did not verify against the active provider.",
             "media_id" => $storedId,

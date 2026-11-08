@@ -110,6 +110,12 @@ trait ManagesWordPressUserProfiles
         $mediaId = $mediaId !== null && $mediaId > 0 ? (int) $mediaId : 0;
         if (!$toolkit) {
             $avatarMetaResult = $this->userProfileBridge($target, $userId, ["avatar" => ["media_id" => $mediaId]]);
+            if ($avatarMetaResult["success"] ?? false) {
+                $avatarMetaResult = array_merge($avatarMetaResult, array_intersect_key(
+                    (array) ($avatarMetaResult["data"] ?? []),
+                    array_flip(["provider", "frontend_avatar_url", "admin_avatar_url"]),
+                ));
+            }
             if ($avatarMetaResult["unavailable"]) {
                 $avatarMetaResult["message"] = "Profile avatar writes need WP Toolkit or HexaWP Core's profile route on the site (update any Hexa plugin, or HWS Base Tools for signed connections).";
             }
