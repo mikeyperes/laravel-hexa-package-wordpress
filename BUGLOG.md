@@ -518,3 +518,12 @@ Severity: High. Consumers lacked an authoritative anonymous draft URL and substi
 - Cause: Legacy-key writes and attachment-only deletion did not match the active avatar provider.
 - Patch: Require active Simple Local Avatars, reject competing providers, never write legacy avatar keys, remove outgoing SLA derivatives on rollback and expose served photo URLs.
 - Guard: Provider precondition and outgoing derivative cleanup in the avatar writer; served URLs propagated from assignment to activity.
+
+## WORDPRESS-AVATAR-005 - An older active provider hid a successfully pushed photo
+
+- Severity: High
+- Symptom: A journalist push saved the new attachment in Simple Local Avatars while WP User Avatars rendered an older portrait.
+- Impact: Successful photo pushes could leave the author's public photo unchanged.
+- Root cause: The writer recognized only Simple Local Avatars, omitted the plural WP User Avatars plugin, accepted any valid upload as public verification, and profile normalization preferred saved metadata.
+- Patch: Detect both active providers, synchronize their per-user payloads without deleting shared old images, require get_avatar_url at both sizes to match the assigned attachment or its derivatives, and retain the rendered URL through readback.
+- Guard: WORDPRESS-AVATAR-005 comments at provider detection, assignment, attachment identity verification and profile normalization. This extends WORDPRESS-AVATAR-004 to multiple supported providers while preserving derivative integrity and cleanup.

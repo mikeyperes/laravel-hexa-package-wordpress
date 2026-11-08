@@ -165,7 +165,7 @@ if ($userId <= 0 || !get_userdata($userId)) {
     echo "HEXA_USER_AVATAR:" . wp_json_encode(["success" => false, "message" => "WordPress user was not found.", "provider" => $provider]);
     return;
 }
-if (!$simpleConfigured || $conflictingAvatarPlugins !== [] || !$simpleAvailable) {
+if ((!$simpleConfigured && !$wpUserAvatarsConfigured) || $conflictingAvatarPlugins !== [] || ($simpleConfigured && !$simpleAvailable) || ($wpUserAvatarsConfigured && !$wpUserAvatarsAvailable)) {
     echo "HEXA_USER_AVATAR:" . wp_json_encode(["success" => false, "message" => $avatarProviderError, "provider" => $provider]);
     return;
 }
@@ -187,6 +187,21 @@ if ($mediaId > 0) {
         return;
     }
 
+    // CRITICAL - see BUGLOG.md WORDPRESS-AVATAR-005. Synchronize every
+    // active provider for this user; preserve old files that others may use.
+    if ($wpUserAvatarsConfigured) {
+        $legacyMatches = is_array($previousLegacy)
+            && (int) ($previousLegacy["media_id"] ?? 0) === $mediaId
+            && ($previousLegacy["full"] ?? "") === $fullUrl;
+        if (!$legacyMatches) {
+            update_user_meta($userId, "wp_user_avatars", [
+                "media_id" => $mediaId,
+                "site_id" => get_current_blog_id(),
+                "full" => $fullUrl,
+            ]);
+        }
+        update_user_meta($userId, "wp_user_avatars_rating", "G");
+    }
     update_option("show_avatars", "1");
     if ($simpleConfigured) {
         if ($previousSimpleMediaId === $mediaId) {
@@ -218,6 +233,10 @@ if ($mediaId > 0) {
             $path = hexa_avatar_upload_path($derivativeUrl);
             if ($path !== "" && $path !== hexa_avatar_upload_path((string) ($previousSimple["full"] ?? "")) && is_file($path)) wp_delete_file($path);
         }
+    }
+    if ($wpUserAvatarsConfigured) {
+        delete_user_meta($userId, "wp_user_avatars");
+        delete_user_meta($userId, "wp_user_avatars_rating");
     }
     delete_user_meta($userId, "simple_local_avatar");
     delete_user_meta($userId, "simple_local_avatar_rating");
@@ -305,11 +324,33 @@ try {
 
 $simpleStored = get_user_meta($userId, "simple_local_avatar", true);
 $legacyStored = get_user_meta($userId, "wp_user_avatars", true);
-$stored = $simpleStored;
+$stored = $simpleConfigured ? $simpleStored : $legacyStored;
 $storedMediaId = hexa_avatar_payload_media_id($stored);
 $storedUrl = hexa_avatar_payload_url($stored);
+// CRITICAL - see BUGLOG.md WORDPRESS-AVATAR-005. A valid older portrait
+// is not verification. Only this attachment or its derivatives may render.
+$expectedUrls = [];
+if ($mediaId > 0) {
+    $expectedUrls[] = (string) wp_get_attachment_url($mediaId);
+    $metadata = wp_get_attachment_metadata($mediaId);
+    foreach ((array) ($metadata["sizes"] ?? []) as $size) {
+        if (!empty($size["file"])) $expectedUrls[] = dirname($expectedUrls[0]) . "/" . $size["file"];
+    }
+    foreach ([$simpleStored, $legacyStored] as $payload) {
+        if (is_array($payload) && hexa_avatar_payload_media_id($payload) === $mediaId) {
+            foreach ($payload as $key => $value) {
+                if (is_numeric($key) && is_string($value)) $expectedUrls[] = $value;
+            }
+        }
+    }
+}
+$matchesAssigned = static function (string $url) use ($expectedUrls): bool {
+    return in_array(strtok($url, "?"), array_map(static fn ($expected) => strtok($expected, "?"), $expectedUrls), true);
+};
 $publicAvatarOk = $mediaId <= 0 || (
-    filter_var($avatar96, FILTER_VALIDATE_URL)
+    $matchesAssigned($avatar96)
+    && $matchesAssigned($avatar250)
+    && filter_var($avatar96, FILTER_VALIDATE_URL)
     && filter_var($avatar250, FILTER_VALIDATE_URL)
     && str_contains($avatar96, "wp-content/uploads/")
     && str_contains($avatar250, "wp-content/uploads/")
@@ -326,6 +367,11 @@ $publicAvatarOk = $mediaId <= 0 || (
 $storedOk = $mediaId > 0
     ? ($storedMediaId === $mediaId && filter_var($storedUrl, FILTER_VALIDATE_URL))
     : ($storedMediaId === 0 && empty($stored));
+if ($wpUserAvatarsConfigured) {
+    $storedOk = $storedOk && ($mediaId > 0
+        ? hexa_avatar_payload_media_id($legacyStored) === $mediaId
+        : empty($legacyStored));
+}
 $success = $storedOk && $publicAvatarOk;
 
 echo "HEXA_USER_AVATAR:" . wp_json_encode([
@@ -416,28 +462,33 @@ if (!function_exists("hexa_simple_local_avatars_instance")) {
     }
 }
 
-// CRITICAL - see BUGLOG.md WORDPRESS-AVATAR-004. Only an active supported
-// provider may accept writes; a fallback image is not provider verification.
+// CRITICAL - see BUGLOG.md WORDPRESS-AVATAR-005. Detect all active providers;
+// a fallback or another attachment is not provider verification.
 $activePlugins = array_values(array_unique(array_merge(
     (array) get_option("active_plugins", []),
     array_keys((array) get_site_option("active_sitewide_plugins", [])),
 )));
 $avatarPlugins = [
     "simple-local-avatars/simple-local-avatars.php" => "Simple Local Avatars",
+    "wp-user-avatars/wp-user-avatars.php" => "WP User Avatars",
     "simple-user-avatar/simple-user-avatar.php" => "Simple User Avatar",
     "one-user-avatar/one-user-avatar.php" => "One User Avatar",
     "wp-user-avatar/wp-user-avatar.php" => "WP User Avatar",
 ];
 $conflictingAvatarPlugins = array_values(array_intersect(array_keys($avatarPlugins), $activePlugins));
-$conflictingAvatarPlugins = array_values(array_diff($conflictingAvatarPlugins, ["simple-local-avatars/simple-local-avatars.php"]));
+$conflictingAvatarPlugins = array_values(array_diff($conflictingAvatarPlugins, ["simple-local-avatars/simple-local-avatars.php", "wp-user-avatars/wp-user-avatars.php"]));
 $simpleConfigured = in_array("simple-local-avatars/simple-local-avatars.php", $activePlugins, true);
 $simple = $simpleConfigured ? hexa_simple_local_avatars_instance() : null;
 $simpleAvailable = is_object($simple);
-$provider = $simpleConfigured && $conflictingAvatarPlugins === [] ? "simple_local_avatars" : "unsupported_avatar_provider";
+$wpUserAvatarsConfigured = in_array("wp-user-avatars/wp-user-avatars.php", $activePlugins, true);
+$wpUserAvatarsAvailable = function_exists("wp_user_avatars_update_avatar");
+$provider = $conflictingAvatarPlugins === [] && ($simpleConfigured || $wpUserAvatarsConfigured)
+    ? ($wpUserAvatarsConfigured ? ($simpleConfigured ? "wp_user_avatars+simple_local_avatars" : "wp_user_avatars") : "simple_local_avatars")
+    : "unsupported_avatar_provider";
 $avatarProviderError = $conflictingAvatarPlugins !== []
-    ? "Unsupported avatar plugin active: " . implode(", ", array_map(static fn($slug) => $avatarPlugins[$slug], $conflictingAvatarPlugins)) . ". Deactivate it and activate Simple Local Avatars, the only supported photo plugin."
-    : (!$simpleConfigured ? "No supported avatar plugin is active. Activate Simple Local Avatars, the only supported photo plugin."
-        : "Simple Local Avatars is active but its assignment API is unavailable.");
+    ? "Unsupported avatar plugin active: " . implode(", ", array_map(static fn($slug) => $avatarPlugins[$slug], $conflictingAvatarPlugins)) . "."
+    : ((!$simpleConfigured && !$wpUserAvatarsConfigured) ? "No supported avatar plugin is active. Activate Simple Local Avatars or WP User Avatars."
+        : "An active avatar plugin API is unavailable.");
 PHP;
     }
 
@@ -480,6 +531,9 @@ PHP;
         $url = (string) ($resolved["thumbnail_url"] ?? "");
         $fullUrl = (string) ($resolved["full_url"] ?? "");
 
+        // CRITICAL - see BUGLOG.md WORDPRESS-AVATAR-005.
+        $rendered = (string) ($user["rendered_avatar_url"] ?? "");
+        if ($rendered !== "") $url = $rendered;
         $user["avatar_provider"] = $provider;
         $user["avatar_media_id"] = (string) ((int) ($resolved["media_id"] ?? 0));
         $user["avatar_url"] = $url;

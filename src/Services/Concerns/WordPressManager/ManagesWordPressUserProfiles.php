@@ -83,7 +83,7 @@ trait ManagesWordPressUserProfiles
         );
         $resolvedSizes = (array) ($resolvedAvatar["sizes"] ?? []);
         $data["avatar_sizes"] = $resolvedSizes !== [] ? $resolvedSizes : (array) ($data["avatar_sizes"] ?? []);
-        if ($data["avatar_thumbnail_url"] !== "") {
+        if (empty($data["rendered_avatar_url"]) && $data["avatar_thumbnail_url"] !== "") {
             $data["avatar_url"] = $data["avatar_thumbnail_url"];
         }
         $data = $this->normalizeUserAvatarForProvider(

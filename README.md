@@ -3,6 +3,16 @@
 WordPress site management and verified post delivery (WP Toolkit and REST
 transports) for HWS Laravel applications.
 
+## Author avatar delivery
+
+WP Toolkit photo pushes synchronize every active supported provider for the selected
+user: WP User Avatars and Simple Local Avatars, including sites running both.
+Other recognized unsupported providers are refused explicitly. Existing WP User
+Avatars files are retained because another author may share them. Public
+verification reads get_avatar_url at 96 and 250 pixels and requires the assigned
+attachment or one of its derivatives, as well as image integrity. User profile
+reads preserve the rendered URL rather than substituting a saved metadata field.
+
 ## WordPress connections
 
 `wordpress_connections` holds one row per WordPress site we can reach: its

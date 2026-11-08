@@ -1,3 +1,7 @@
+# 2.12.2 - 2026-11-08
+
+- Synchronize active WP User Avatars and Simple Local Avatars for a selected author. Verify the rendered avatar against the assigned attachment, and preserve rendered URLs in profile reads.
+
 # Changelog
 
 ## 2.12.1 - 2026-11-08
