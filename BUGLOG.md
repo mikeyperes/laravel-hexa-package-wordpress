@@ -527,3 +527,12 @@ Severity: High. Consumers lacked an authoritative anonymous draft URL and substi
 - Root cause: The writer recognized only Simple Local Avatars, omitted the plural WP User Avatars plugin, accepted any valid upload as public verification, and profile normalization preferred saved metadata.
 - Patch: Detect both active providers, synchronize their per-user payloads without deleting shared old images, require get_avatar_url at both sizes to match the assigned attachment or its derivatives, and retain the rendered URL through readback.
 - Guard: WORDPRESS-AVATAR-005 comments at provider detection, assignment, attachment identity verification and profile normalization. This extends WORDPRESS-AVATAR-004 to multiple supported providers while preserving derivative integrity and cleanup.
+
+## WORDPRESS-CONTEXT-001 - Refresh ignored company details and founders
+
+- Severity: High
+- Symptom: A successful Peres Daily context refresh left the mission and about empty and omitted founders despite saved HWS Base Tools company details.
+- Impact: Publish could not use the publication's current identity and founding team.
+- Root cause: PublicationContextService read only legacy mission_statement, biography, biography_short and website option fields.
+- Patch: Prefer the Website Identity read API and saved company subfields for mission and description, retain the company details, and read ordered public profiles from the Founders API. Legacy publication text remains a fallback for empty company text.
+- Guard: WORDPRESS-CONTEXT-001 comment at the source-selection boundary; explicit empty-value selection prevents blank legacy or company fields from masking fallback text. Founders remain authoritative even when empty or hidden on the website.

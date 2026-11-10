@@ -104,3 +104,17 @@ LiteSpeed; the site cache is never purged. Profiles calls it from
 ### Author photo delivery
 
 Require active Simple Local Avatars, reject competing providers, never write legacy avatar keys, remove outgoing SLA derivatives on rollback and expose served photo URLs.
+
+## Publication context
+
+`PublicationContextService::inspect($target, true)` refreshes a site's context.
+HWS Base Tools Website Identity is the primary source: company mission maps to
+`mission_statement`, and company description maps to `about_full` and
+`about_short`, including their plain-text companions. Empty company text falls
+back to the legacy mission/biography fields and then the old website group.
+The public `hws_site_identity()` read API supplies `company_details`; saved
+`options_hws_company_*` mission, description and URL values are also supported.
+`hws_publication_founders()` supplies ordered public founder profiles under
+`founders`, independently of whether the website displays the section. An empty
+Founders list remains empty; no private WordPress user data is exported.
+Successful reads retain the existing 30-day cache and connection-report flow.

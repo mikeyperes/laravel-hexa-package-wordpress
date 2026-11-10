@@ -87,15 +87,30 @@ $to1Line = function($v) {
     $text = preg_replace("/\\s+/", " ", $text);
     return trim((string) $text);
 };
-$mission = $readField("mission_statement");
-$biography = $readField("biography");
-$biographyShort = $readField("biography_short");
-$website = $readField("website");
-if (is_array($website)) {
-    $mission = $mission ?? ($website["mission_statement"] ?? null);
-    $biography = $biography ?? ($website["biography"] ?? null);
-    $biographyShort = $biographyShort ?? ($website["biography_short"] ?? null);
+// CRITICAL - see BUGLOG.md WORDPRESS-CONTEXT-001.
+// Website Identity and Founders own these values; old publication fields are fallback only.
+$firstFilled = function(...$values) {
+    foreach ($values as $value) {
+        if ($value !== null && $value !== false && $value !== [] && (!is_string($value) || trim($value) !== "")) {
+            return $value;
+        }
+    }
+    return null;
+};
+$identity = function_exists("hws_site_identity") ? hws_site_identity() : [];
+$company = is_array($identity) && is_array($identity["company"] ?? null) ? $identity["company"] : [];
+$storedCompany = $readField("hws_company");
+$storedCompany = is_array($storedCompany) ? $storedCompany : [];
+foreach (["mission", "description", "url"] as $key) {
+    $company[$key] = $firstFilled($company[$key] ?? null, $readField("hws_company_" . $key), $storedCompany[$key] ?? null);
 }
+$website = $readField("website");
+$legacyWebsite = is_array($website) ? $website : [];
+$mission = $firstFilled($company["mission"], $readField("mission_statement"), $legacyWebsite["mission_statement"] ?? null);
+$biography = $firstFilled($company["description"], $readField("biography"), $legacyWebsite["biography"] ?? null);
+$biographyShort = $firstFilled($company["description"], $readField("biography_short"), $legacyWebsite["biography_short"] ?? null);
+// The public read API returns ordered safe profiles, even when the on-page section is hidden.
+$founders = function_exists("hws_publication_founders") ? hws_publication_founders() : [];
 $payload = [
     "site" => [
         "name" => get_bloginfo("name"),
@@ -113,6 +128,8 @@ $payload = [
         "about_short" => $normalize($biographyShort),
         "about_short_text" => $to1Line($biographyShort),
         "website_option" => $normalize($website),
+        "company_details" => $normalize($company),
+        "founders" => $normalize($founders),
     ],
     "fetched_at" => gmdate("c"),
 ];

@@ -1,3 +1,7 @@
+## 2.12.3 - 2026-11-10
+
+- WORDPRESS-CONTEXT-001: Refresh publication context from HWS Base Tools Website Identity and its ordered Founders list. Prefer company mission and description, preserve company details and founder profiles, and use legacy publication fields only for missing text.
+
 # 2.12.2 - 2026-11-08
 
 - Synchronize active WP User Avatars and Simple Local Avatars for a selected author. Verify the rendered avatar against the assigned attachment, and preserve rendered URLs in profile reads.
