@@ -6,7 +6,9 @@ transports) for HWS Laravel applications.
 ## Author avatar delivery
 
 WP Toolkit photo pushes synchronize every active supported provider for the selected
-user: WP User Avatars and Simple Local Avatars, including sites running both.
+user: WP User Avatars, Simple Local Avatars and One User Avatar, including sites
+running multiple providers. One User Avatar uses the active blog prefix and
+attachment ownership metadata; assignment and removal preserve shared images.
 Other recognized unsupported providers are refused explicitly. Existing WP User
 Avatars files are retained because another author may share them. Public
 verification reads get_avatar_url at 96 and 250 pixels and requires the assigned

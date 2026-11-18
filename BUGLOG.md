@@ -536,3 +536,12 @@ Severity: High. Consumers lacked an authoritative anonymous draft URL and substi
 - Root cause: PublicationContextService read only legacy mission_statement, biography, biography_short and website option fields.
 - Patch: Prefer the Website Identity read API and saved company subfields for mission and description, retain the company details, and read ordered public profiles from the Founders API. Legacy publication text remains a fallback for empty company text.
 - Guard: WORDPRESS-CONTEXT-001 comment at the source-selection boundary; explicit empty-value selection prevents blank legacy or company fields from masking fallback text. Founders remain authoritative even when empty or hidden on the website.
+
+## WORDPRESS-AVATAR-006 - One User Avatar blocked journalist photo delivery
+
+- Severity: High
+- Symptom: a journalist photo push refused an active One User Avatar plugin, including sites also running Simple Local Avatars.
+- Impact: the supported Profiles photo operation could not update those authors.
+- Root cause: provider detection explicitly classified One User Avatar as unsupported; its blog-prefixed attachment identity was absent from normalization.
+- Patch: detect its native runtime, synchronize the active blog's user_avatar and attachment ownership metadata, expose a normalized read payload, and verify its identity together with the rendered image. Removal clears only this user's metadata, preserving shared images.
+- Guard: WORDPRESS-AVATAR-006 comments in ManagesWordPressAvatars; existing assigned-image and pixel verification remain required. Extends WORDPRESS-AVATAR-001 and WORDPRESS-AVATAR-004 with explicit supported-provider behavior.

@@ -1,3 +1,7 @@
+## 2.12.4 - 2026-11-18
+
+- WORDPRESS-AVATAR-006: Support One User Avatar alone or alongside other supported providers, including custom blog prefixes, verified photo readback and safe removal.
+
 ## 2.12.3 - 2026-11-10
 
 - WORDPRESS-CONTEXT-001: Refresh publication context from HWS Base Tools Website Identity and its ordered Founders list. Prefer company mission and description, preserve company details and founder profiles, and use legacy publication fields only for missing text.

@@ -4,6 +4,7 @@ namespace hexa_package_wordpress\Services\Concerns\WordPressManager;
 
 use Illuminate\Support\Facades\Cache;
 
+/** Detect active avatar providers and synchronize verified author photos. */
 trait ManagesWordPressAvatars
 {
     private function writeUserAvatarPayload(array $target, int $userId, int $mediaId, string $url): array
@@ -165,7 +166,7 @@ if ($userId <= 0 || !get_userdata($userId)) {
     echo "HEXA_USER_AVATAR:" . wp_json_encode(["success" => false, "message" => "WordPress user was not found.", "provider" => $provider]);
     return;
 }
-if ((!$simpleConfigured && !$wpUserAvatarsConfigured) || $conflictingAvatarPlugins !== [] || ($simpleConfigured && !$simpleAvailable) || ($wpUserAvatarsConfigured && !$wpUserAvatarsAvailable)) {
+if ((!$simpleConfigured && !$wpUserAvatarsConfigured && !$oneUserAvatarConfigured) || $conflictingAvatarPlugins !== [] || ($simpleConfigured && !$simpleAvailable) || ($wpUserAvatarsConfigured && !$wpUserAvatarsAvailable) || ($oneUserAvatarConfigured && !$oneUserAvatarAvailable)) {
     echo "HEXA_USER_AVATAR:" . wp_json_encode(["success" => false, "message" => $avatarProviderError, "provider" => $provider]);
     return;
 }
@@ -202,6 +203,17 @@ if ($mediaId > 0) {
         }
         update_user_meta($userId, "wp_user_avatars_rating", "G");
     }
+    // CRITICAL - see BUGLOG.md WORDPRESS-AVATAR-006.
+    // Bug: One User Avatar was rejected, and unprefixed metadata misses custom-prefix sites.
+    // Fix: mirror its native per-blog user key and attachment ownership metadata.
+    // Why this way: synchronize active providers without invoking its form handler,
+    // which requires request globals and can delete attachments shared by other users.
+    if ($oneUserAvatarConfigured) {
+        global $wpdb;
+        delete_metadata("post", null, "_wp_attachment_wp_user_avatar", $userId, true);
+        add_post_meta($mediaId, "_wp_attachment_wp_user_avatar", $userId);
+        update_user_meta($userId, $wpdb->get_blog_prefix() . "user_avatar", $mediaId);
+    }
     update_option("show_avatars", "1");
     if ($simpleConfigured) {
         if ($previousSimpleMediaId === $mediaId) {
@@ -237,6 +249,11 @@ if ($mediaId > 0) {
     if ($wpUserAvatarsConfigured) {
         delete_user_meta($userId, "wp_user_avatars");
         delete_user_meta($userId, "wp_user_avatars_rating");
+    }
+    if ($oneUserAvatarConfigured) {
+        global $wpdb;
+        delete_metadata("post", null, "_wp_attachment_wp_user_avatar", $userId, true);
+        delete_user_meta($userId, $wpdb->get_blog_prefix() . "user_avatar");
     }
     delete_user_meta($userId, "simple_local_avatar");
     delete_user_meta($userId, "simple_local_avatar_rating");
@@ -324,7 +341,13 @@ try {
 
 $simpleStored = get_user_meta($userId, "simple_local_avatar", true);
 $legacyStored = get_user_meta($userId, "wp_user_avatars", true);
-$stored = $simpleConfigured ? $simpleStored : $legacyStored;
+$oneStored = [];
+if ($oneUserAvatarConfigured) {
+    global $wpdb;
+    $oneMediaId = (int) get_user_meta($userId, $wpdb->get_blog_prefix() . "user_avatar", true);
+    if ($oneMediaId > 0) $oneStored = ["media_id" => $oneMediaId, "full" => (string) wp_get_attachment_url($oneMediaId)];
+}
+$stored = $simpleConfigured ? $simpleStored : ($wpUserAvatarsConfigured ? $legacyStored : $oneStored);
 $storedMediaId = hexa_avatar_payload_media_id($stored);
 $storedUrl = hexa_avatar_payload_url($stored);
 // CRITICAL - see BUGLOG.md WORDPRESS-AVATAR-005. A valid older portrait
@@ -371,6 +394,12 @@ if ($wpUserAvatarsConfigured) {
     $storedOk = $storedOk && ($mediaId > 0
         ? hexa_avatar_payload_media_id($legacyStored) === $mediaId
         : empty($legacyStored));
+}
+if ($oneUserAvatarConfigured) {
+    $storedOk = $storedOk && ($mediaId > 0
+        ? hexa_avatar_payload_media_id($oneStored) === $mediaId
+            && in_array($userId, array_map("intval", get_post_meta($mediaId, "_wp_attachment_wp_user_avatar", false)), true)
+        : empty($oneStored));
 }
 $success = $storedOk && $publicAvatarOk;
 
@@ -476,22 +505,33 @@ $avatarPlugins = [
     "wp-user-avatar/wp-user-avatar.php" => "WP User Avatar",
 ];
 $conflictingAvatarPlugins = array_values(array_intersect(array_keys($avatarPlugins), $activePlugins));
-$conflictingAvatarPlugins = array_values(array_diff($conflictingAvatarPlugins, ["simple-local-avatars/simple-local-avatars.php", "wp-user-avatars/wp-user-avatars.php"]));
+$conflictingAvatarPlugins = array_values(array_diff($conflictingAvatarPlugins, ["simple-local-avatars/simple-local-avatars.php", "wp-user-avatars/wp-user-avatars.php", "one-user-avatar/one-user-avatar.php"]));
 $simpleConfigured = in_array("simple-local-avatars/simple-local-avatars.php", $activePlugins, true);
 $simple = $simpleConfigured ? hexa_simple_local_avatars_instance() : null;
 $simpleAvailable = is_object($simple);
 $wpUserAvatarsConfigured = in_array("wp-user-avatars/wp-user-avatars.php", $activePlugins, true);
 $wpUserAvatarsAvailable = function_exists("wp_user_avatars_update_avatar");
-$provider = $conflictingAvatarPlugins === [] && ($simpleConfigured || $wpUserAvatarsConfigured)
-    ? ($wpUserAvatarsConfigured ? ($simpleConfigured ? "wp_user_avatars+simple_local_avatars" : "wp_user_avatars") : "simple_local_avatars")
+// CRITICAL - see BUGLOG.md WORDPRESS-AVATAR-006.
+// Bug: One User Avatar was treated as a conflicting provider even with SLA active.
+// Fix: include its runtime and label in the same provider contract.
+// Why this way: every active provider must agree before public verification can pass.
+$oneUserAvatarConfigured = in_array("one-user-avatar/one-user-avatar.php", $activePlugins, true);
+$oneUserAvatarAvailable = function_exists("get_wp_user_avatar_src") && function_exists("has_wp_user_avatar");
+$providers = [];
+if ($wpUserAvatarsConfigured) $providers[] = "wp_user_avatars";
+if ($simpleConfigured) $providers[] = "simple_local_avatars";
+if ($oneUserAvatarConfigured) $providers[] = "one_user_avatar";
+$provider = $conflictingAvatarPlugins === [] && $providers !== []
+    ? implode("+", $providers)
     : "unsupported_avatar_provider";
 $avatarProviderError = $conflictingAvatarPlugins !== []
     ? "Unsupported avatar plugin active: " . implode(", ", array_map(static fn($slug) => $avatarPlugins[$slug], $conflictingAvatarPlugins)) . "."
-    : ((!$simpleConfigured && !$wpUserAvatarsConfigured) ? "No supported avatar plugin is active. Activate Simple Local Avatars or WP User Avatars."
+    : ((!$simpleConfigured && !$wpUserAvatarsConfigured && !$oneUserAvatarConfigured) ? "No supported avatar plugin is active. Activate Simple Local Avatars, WP User Avatars or One User Avatar."
         : "An active avatar plugin API is unavailable.");
 PHP;
     }
 
+    /** Return the active provider combination for this site. */
     public function activeUserAvatarProvider(array $target, bool $forceRefresh = false): string
     {
         $target = $this->normalizeTarget($target);
@@ -522,11 +562,18 @@ PHP;
         return $provider;
     }
 
+    /** Normalize stored photo identity while preserving the rendered avatar URL. */
     public function normalizeUserAvatarForProvider(array $user, string $provider): array
     {
         $payload = $provider === "simple_local_avatars"
             ? ($user["simple_local_avatar"] ?? "")
             : (($user["wp_user_avatars"] ?? "") ?: ($user["avatar_urls"] ?? []));
+        // Bug: One User Avatar stores an attachment ID under a blog-prefixed key.
+        // Fix: normalize its explicit readback payload rather than a fallback avatar.
+        // Why this way: custom prefixes and mixed providers retain the actual assigned identity.
+        if (in_array("one_user_avatar", explode("+", $provider), true)) {
+            $payload = $user["one_user_avatar"] ?? "";
+        }
         $resolved = $this->resolveUserAvatarPayload($payload, 224);
         $url = (string) ($resolved["thumbnail_url"] ?? "");
         $fullUrl = (string) ($resolved["full_url"] ?? "");

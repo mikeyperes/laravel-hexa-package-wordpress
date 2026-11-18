@@ -247,6 +247,11 @@ trait ManagesWordPressUserProfiles
             '$legacyAvatarUrl=$legacyAvatarId>0 ? (string) wp_get_attachment_url($legacyAvatarId) : "";',
             'if ($legacyAvatarUrl==="" && $legacyAvatarId>0) { $legacyAvatarUrl=(string) get_post_field("guid",$legacyAvatarId); }',
             $this->simpleLocalAvatarRuntimePhp(),
+            // Bug: One User Avatar's custom-prefix key is not a portable profile field.
+            // Fix: expose a normalized payload from the active blog's native metadata.
+            // Why this way: photo readback and rollback reuse the same provider contract.
+            'if ($oneUserAvatarConfigured) { global $wpdb; $oneId=(int) get_user_meta(' . $userId . ',$wpdb->get_blog_prefix()."user_avatar",true); $meta[]=["meta_key"=>"one_user_avatar","meta_value"=>maybe_serialize($oneId>0 ? ["media_id"=>$oneId,"full"=>(string) wp_get_attachment_url($oneId)] : [])]; }',
+
             'echo "HEXA_USER_PROFILE:" . wp_json_encode(["rows"=>$rows,"meta"=>$meta,"legacy_avatar_url"=>$legacyAvatarUrl,"avatar_provider"=>$provider]);',
         ]);
 

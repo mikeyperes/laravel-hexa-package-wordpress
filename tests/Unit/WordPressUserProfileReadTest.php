@@ -69,6 +69,30 @@ class WordPressUserProfileReadTest extends TestCase
         $this->assertStringEndsWith('echo "HEXA_USER_LIST:" . wp_json_encode($rows);', $php);
     }
 
+    /** Verify One User Avatar readback keeps its attachment identity and the actual rendered URL. */
+    public function test_one_user_avatar_readback_uses_native_identity_with_a_custom_blog_prefix(): void
+    {
+        foreach (['one_user_avatar', 'simple_local_avatars+one_user_avatar'] as $provider) {
+            $payload = json_decode(substr($this->profilePayload()['stdout'], strlen('HEXA_USER_PROFILE:')), true);
+            $payload['avatar_provider'] = $provider;
+            $payload['rows'][0]['rendered_avatar_url'] = 'https://example.test/wp-content/uploads/assigned-96.jpg';
+            $payload['meta'][] = ['meta_key' => 'custom_blog_user_avatar', 'meta_value' => '88'];
+            $payload['meta'][] = ['meta_key' => 'one_user_avatar', 'meta_value' => serialize([
+                'media_id' => 88, 'full' => 'https://example.test/wp-content/uploads/assigned.jpg',
+            ])];
+            $manager = new FakeWordPressUserProfileManager([
+                'success' => true, 'stdout' => 'HEXA_USER_PROFILE:' . json_encode($payload),
+            ]);
+
+            $data = $manager->getUserProfile(['mode' => 'wptoolkit'], 7, true)['data'];
+
+            $this->assertSame('88', $data['avatar_media_id']);
+            $this->assertSame('https://example.test/wp-content/uploads/assigned.jpg', $data['avatar_full_url']);
+            $this->assertSame('https://example.test/wp-content/uploads/assigned-96.jpg', $data['avatar_url']);
+            $this->assertSame($provider, $data['avatar_provider']);
+        }
+    }
+
     private function profilePayload(): array
     {
         return [
